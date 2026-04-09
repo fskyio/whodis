@@ -1,0 +1,6 @@
+.git
+.gitignore
+whodis
+*.test.go
+Containerfile
+.dockerignore
