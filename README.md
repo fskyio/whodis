@@ -1,6 +1,8 @@
-# whodis
+# who dis?
 
 A lightweight, self-hosted WHOIS lookup tool with a clean web interface. Query domain names, TLDs, IP addresses, CIDR ranges, and ASNs from your browser.
+
+![Screenshot of who dis?](./docs/images/screenshot.png)
 
 ## Deploying
 
