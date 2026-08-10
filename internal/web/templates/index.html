@@ -18,9 +18,9 @@
 			</svg>
 		</a>
 		
-		<form action="/whois" method="GET">
+		<form action="/lookup" method="GET">
 			<div class="search-container">
-				<input type="search" name="q" placeholder="IP, CIDR, Domain, TLD, or ASN..." value="{{ .Query }}" autocapitalize="none" autofocus required>
+				<input type="search" name="q" placeholder="Domain, IP, CIDR, ASN, or entity handle..." value="{{ .Query }}" autocapitalize="none" autofocus required>
 				<button type="submit" aria-label="Search">
 					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 						<circle cx="11" cy="11" r="8"></circle>
@@ -28,6 +28,12 @@
 					</svg>
 				</button>
 			</div>
+			<fieldset class="protocol-selector">
+				<legend>Protocol</legend>
+				<label><input type="radio" name="protocol" value="auto" {{ if .AutoChecked }}checked{{ end }}><span>Auto</span></label>
+				<label><input type="radio" name="protocol" value="rdap" {{ if .RDAPChecked }}checked{{ end }}><span>RDAP</span></label>
+				<label><input type="radio" name="protocol" value="whois" {{ if .WHOISChecked }}checked{{ end }}><span>WHOIS</span></label>
+			</fieldset>
 		</form>
 	</header>
 
@@ -37,25 +43,35 @@
 				{{ .Error }}
 			</div>
 		{{ end }}
+		{{ if .Notice }}
+			<div class="notice-message">{{ .Notice }}</div>
+		{{ end }}
 
-		{{ if .Responses }}
-			{{ $fetchedAt := .FetchedAt }}
-			{{ range .Responses }}
+		{{ if .Results }}
+			{{ range .Results }}
 				<div class="result-meta">
-					<div class="servers">
-						Queried server: {{ .Server }}
+					<div class="source">
+						<span class="protocol-badge">{{ .Protocol }}</span>
+						{{ .SourceLabel }}: {{ .Source }}{{ if .Status }} · {{ .Status }}{{ end }}
 					</div>
-					{{ if $fetchedAt }}
+					{{ if $.FetchedAt }}
 						<div class="fetched-at">
-							Fetched: {{ $fetchedAt }}
+							Fetched: {{ $.FetchedAt }}
 						</div>
 					{{ end }}
 				</div>
-				<pre><code>{{ .Body }}</code></pre>
+				{{ if .Warning }}<div class="result-warning">{{ .Warning }}</div>{{ end }}
+				<pre><code>{{ if .Tokens }}{{ range .Tokens }}{{ if .Class }}<span class="json-{{ .Class }}">{{ .Text }}</span>{{ else }}{{ .Text }}{{ end }}{{ end }}{{ else }}{{ .Body }}{{ end }}</code></pre>
+				{{ if .RawBody }}
+					<details class="raw-response">
+						<summary>Raw JSON</summary>
+						<pre><code>{{ .RawBody }}</code></pre>
+					</details>
+				{{ end }}
 			{{ end }}
 		{{ else if not .Query }}
 			<div class="index-hero">
-				<p><b>who dis?</b> is a simple web tool for querying WHOIS information of entities like domain names, TLDs, IP addresses, CIDR ranges, and ASNs.</p>
+				<p><b>who dis?</b> is a simple web tool for querying RDAP and WHOIS registration data for domain names, TLDs, IP addresses, CIDR ranges, ASNs, and tagged entity handles.</p>
 			</div>
 		{{ end }}
 	</main>
