@@ -1,10 +1,9 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"html/template"
 	"log"
@@ -12,13 +11,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"foundry.fsky.io/fsky/whodis/whois"
 )
 
 //go:embed templates/* static/*
@@ -135,6 +135,12 @@ func (r *RateLimiter) Cleanup(maxAge time.Duration) {
 var limiter *RateLimiter
 var trustProxyHeaders bool
 
+type lookupClient interface {
+	Lookup(context.Context, string) (whois.Result, error)
+}
+
+var whoisClient lookupClient = whois.NewClient()
+
 // clientIP extracts the client IP, optionally honoring X-Forwarded-For /
 // X-Real-IP when TRUST_PROXY_HEADERS is enabled. These headers are trivially
 // spoofable by direct clients, so they must only be trusted when whodis sits
@@ -209,11 +215,11 @@ func handleWhois(w http.ResponseWriter, r *http.Request) {
 		// Check Cache
 		if entry, found := cache.Get(queryLower); found {
 			isCacheHit = true
+			data.Responses = entry.Responses
 			if entry.IsError {
 				data.Error = entry.Error
 				effectiveTTL = 5 * time.Minute
 			} else {
-				data.Responses = entry.Responses
 				effectiveTTL = cacheTTL
 			}
 			data.FetchedAt = entry.FetchedAt.Format(time.RFC1123)
@@ -231,74 +237,36 @@ func handleWhois(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// Cache Miss - Run whois command
-			cmd := exec.Command("whois", "--verbose", "--", query)
+			lookupCtx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+			result, lookupErr := whoisClient.Lookup(lookupCtx, query)
+			cancel()
+			if errors.Is(lookupErr, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) {
+				return
+			}
 
-			var out bytes.Buffer
-			var stderr bytes.Buffer
-			cmd.Stdout = &out
-			cmd.Stderr = &stderr
-
-			err := cmd.Run()
+			responses := make([]WhoisResponse, 0, len(result.Responses))
+			for _, response := range result.Responses {
+				body := strings.TrimSpace(strings.ToValidUTF8(string(response.Body), "\uFFFD"))
+				if body == "" {
+					continue
+				}
+				responses = append(responses, WhoisResponse{
+					Server: displayEndpoint(response.Endpoint),
+					Body:   body,
+				})
+			}
 
 			entryToCache := CacheEntry{}
 			cacheDuration := cacheTTL
-
-			if out.Len() > 0 || err != nil {
-				var responses []WhoisResponse
-				var currentServer string = "unknown"
-				var currentBody []string
-
-				scanner := bufio.NewScanner(&out)
-				scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-				for scanner.Scan() {
-					line := scanner.Text()
-					if strings.HasPrefix(line, "Using server ") {
-						if len(strings.TrimSpace(strings.Join(currentBody, ""))) > 0 {
-							responses = append(responses, WhoisResponse{
-								Server: currentServer,
-								Body:   strings.TrimSpace(strings.Join(currentBody, "\n")),
-							})
-						}
-						server := strings.TrimSpace(strings.TrimPrefix(line, "Using server "))
-						currentServer = strings.TrimSuffix(server, ".")
-						currentBody = []string{}
-					} else if strings.HasPrefix(line, "Query string: ") {
-						// skip
-					} else {
-						currentBody = append(currentBody, line)
-					}
-				}
-				if scanErr := scanner.Err(); scanErr != nil && err == nil {
-					err = scanErr
-				}
-
-				if len(strings.TrimSpace(strings.Join(currentBody, ""))) > 0 {
-					responses = append(responses, WhoisResponse{
-						Server: currentServer,
-						Body:   strings.TrimSpace(strings.Join(currentBody, "\n")),
-					})
-				}
-
-				if len(responses) == 0 && err != nil {
-					data.Error = "Error executing whois: " + err.Error()
-					if stderr.Len() > 0 {
-						data.Error += "\n" + stderr.String()
-					}
-					entryToCache.Error = data.Error
-					entryToCache.IsError = true
-					cacheDuration = 5 * time.Minute // Short cache for errors
-				} else if len(responses) == 0 {
-					data.Error = "No output returned from whois command."
-					entryToCache.Error = data.Error
-					entryToCache.IsError = true
-					cacheDuration = 5 * time.Minute
-				} else {
-					data.Responses = responses
-					entryToCache.Responses = responses
-				}
-			} else {
-				data.Error = "No output returned from whois command."
+			data.Responses = responses
+			entryToCache.Responses = responses
+			if lookupErr != nil {
+				data.Error = "WHOIS lookup failed: " + lookupErr.Error()
+				entryToCache.Error = data.Error
+				entryToCache.IsError = true
+				cacheDuration = 5 * time.Minute
+			} else if len(responses) == 0 {
+				data.Error = "No output returned from the WHOIS server."
 				entryToCache.Error = data.Error
 				entryToCache.IsError = true
 				cacheDuration = 5 * time.Minute
@@ -331,6 +299,13 @@ func handleWhois(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Template execution error: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}
+}
+
+func displayEndpoint(endpoint whois.Endpoint) string {
+	if endpoint.Port == 0 || endpoint.Port == 43 {
+		return endpoint.Host
+	}
+	return endpoint.String()
 }
 
 func main() {

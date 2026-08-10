@@ -16,7 +16,7 @@ A [Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html
 
 ### From source
 
-Requires Go 1.26+ and the [rfc1036/whois](https://github.com/rfc1036/whois) binary available on your system.
+Requires Go 1.26+.
 
 ```sh
 go build
@@ -24,6 +24,43 @@ go build
 ```
 
 Then open http://localhost:8080 in your browser.
+
+## Go package
+
+The native client is also importable without pulling the web application into
+your program:
+
+```go
+import "foundry.fsky.io/fsky/whodis/whois"
+
+client := whois.NewClient()
+result, err := client.Lookup(ctx, "example.com")
+```
+
+The repository remains one Go module, so its downloaded source archive also
+contains the web app, but importing `whois` neither compiles nor initializes
+the application package.
+
+`Lookup` chooses an appropriate server and follows recognized referrals.
+`Query` sends an exact, single-line query to a caller-selected `whois.Endpoint`.
+Responses are returned as raw bytes together with the endpoint, exact wire
+query, and referral metadata; interpreting registry records is left to the
+caller.
+
+When a later referral fails, `Lookup` returns the completed responses together
+with the error. Errors support `errors.Is` and `errors.As`, including typed
+operation errors and registry web URLs for resources without WHOIS service.
+
+Automatic lookups only contact public WHOIS/RWhois endpoints by default.
+Direct queries permit caller-selected private endpoints, and both policies can
+be replaced with client options.
+
+The routing snapshot is compiled into the package. Maintainers can refresh it
+from the public IANA registries with:
+
+```sh
+go generate ./whois
+```
 
 ## Configuration
 
