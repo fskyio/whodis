@@ -41,4 +41,4 @@ Error results are cached for 5 minutes regardless of `CACHE_TTL`. Rate limiting 
 
 ## License
 
-The code of this project is released under the [Unlicense](https://unlicense.org/). See the `LICENSE` file for details.
+The code of this project is released under the [Zero-Clause BSD License](https://opensource.org/license/0bsd/). See the `LICENSE` file for details.
