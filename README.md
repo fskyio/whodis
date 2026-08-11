@@ -116,7 +116,7 @@ Configuration is handled through environment variables:
 | `CACHE_TTL`             | `24h`   | Cache duration for successful lookups. Accepts Go duration strings (`1h`, `30m`, etc.) |
 | `RATE_LIMIT_PER_MINUTE` | `20`    | Per-IP rate limit applied only to cache misses. Set to `0` to disable.      |
 | `RATE_LIMIT_BURST`      | `10`    | Maximum burst of cache-miss lookups a single IP can make before throttling. |
-| `TRUST_PROXY_HEADERS`   | `false` | When `true`, honor `X-Forwarded-For` / `X-Real-IP` for client IP. Only enable when whodis is behind a trusted reverse proxy. |
+| `TRUST_PROXY_HEADERS`   | `false` | When `true`, honor `X-Forwarded-For` / `X-Real-IP` for client IP and `X-Forwarded-Proto` for generated OpenSearch URLs. Only enable when whodis is behind a trusted reverse proxy. |
 
 Error results are cached for 5 minutes regardless of `CACHE_TTL`. Rate limiting only applies to cache misses. Popular lookups served from cache are never throttled.
 

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/xml"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -32,7 +33,7 @@ func TestLookupDefaultsToAutoAndRendersCompleteRDAPJSON(t *testing.T) {
 		t.Fatalf("status = %d, cache = %q", recorder.Code, recorder.Header().Get("Whodis-Cache"))
 	}
 	page := recorder.Body.String()
-	for _, want := range []string{"RDAP", "https://rdap.example/domain/example.com", "200 OK", "json-key", "json-boolean", "extension", "unknown", "&lt;script&gt;alert(1)&lt;/script&gt;", "<summary>Raw JSON</summary>", `value="auto" checked`} {
+	for _, want := range []string{"RDAP", "https://rdap.example/domain/example.com", "200 OK", "json-key", "json-boolean", "extension", "unknown", "&lt;script&gt;alert(1)&lt;/script&gt;", "<summary>Raw JSON</summary>", `value="auto" checked`, `rel="search"`, `href="/opensearch.xml"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page does not contain %q:\n%s", want, page)
 		}
@@ -42,6 +43,44 @@ func TestLookupDefaultsToAutoAndRendersCompleteRDAPJSON(t *testing.T) {
 	}
 	if whoisClient.calls != 0 {
 		t.Fatalf("WHOIS calls = %d", whoisClient.calls)
+	}
+}
+
+func TestOpenSearchDescriptionUsesRequestOrigin(t *testing.T) {
+	app := newTestApp(t, &fakeWHOISClient{}, &fakeRDAPClient{})
+	request := httptest.NewRequest(http.MethodGet, "http://who.dis.test/opensearch.xml", nil)
+	recorder := httptest.NewRecorder()
+	app.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Type") != "application/opensearchdescription+xml; charset=utf-8" {
+		t.Fatalf("status = %d, content type = %q", recorder.Code, recorder.Header().Get("Content-Type"))
+	}
+	var description openSearchDescription
+	if err := xml.Unmarshal(recorder.Body.Bytes(), &description); err != nil {
+		t.Fatalf("decode OpenSearch description: %v\n%s", err, recorder.Body.String())
+	}
+	if description.ShortName != "who dis?" || description.InputEncoding != "UTF-8" || len(description.URLs) != 2 {
+		t.Fatalf("description = %#v", description)
+	}
+	if got, want := description.Image, (openSearchImage{Height: 16, Width: 16, Type: "image/x-icon", URL: "http://who.dis.test/favicon.ico"}); got != want {
+		t.Fatalf("image = %#v, want %#v", got, want)
+	}
+	if got, want := description.URLs[1].Template, "http://who.dis.test/lookup?q={searchTerms}"; got != want {
+		t.Fatalf("search template = %q, want %q", got, want)
+	}
+}
+
+func TestOpenSearchDescriptionUsesForwardedHTTPSWhenTrusted(t *testing.T) {
+	app := newTestApp(t, &fakeWHOISClient{}, &fakeRDAPClient{})
+	app.config.TrustProxyHeaders = true
+	request := httptest.NewRequest(http.MethodGet, "/opensearch.xml", nil)
+	request.Host = "who.dis.test"
+	request.Header.Set("X-Forwarded-Proto", "https, http")
+	recorder := httptest.NewRecorder()
+	app.Handler().ServeHTTP(recorder, request)
+
+	if !strings.Contains(recorder.Body.String(), `template="https://who.dis.test/lookup?q={searchTerms}"`) {
+		t.Fatalf("OpenSearch description does not use forwarded HTTPS:\n%s", recorder.Body.String())
 	}
 }
 

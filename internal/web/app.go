@@ -83,6 +83,7 @@ func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/static/", http.FileServer(http.FS(content)))
 	mux.HandleFunc("/favicon.ico", a.handleFavicon)
+	mux.HandleFunc("/opensearch.xml", a.handleOpenSearch)
 	mux.HandleFunc("/lookup", a.handleLookup)
 	mux.HandleFunc("/whois", a.handleLegacyWhois)
 	mux.HandleFunc("/", a.handleIndex)
