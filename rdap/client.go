@@ -11,6 +11,7 @@ import (
 const (
 	defaultOperationTimeout = 30 * time.Second
 	defaultIdleTimeout      = 10 * time.Second
+	defaultMaxHops          = 5
 	defaultMaxRedirects     = 5
 	defaultMaxQueryBytes    = 4 * 1024
 	defaultMaxResponseBytes = 2 * 1024 * 1024
@@ -30,19 +31,32 @@ type Endpoint struct {
 type Response struct {
 	// URL is the final URL after redirects.
 	URL string
+	// Duration is the time spent completing this logical HTTP exchange,
+	// including redirects, DNS, connection setup, and reading the body.
+	Duration time.Duration
+	// Error is the error encountered while completing the exchange, if any.
+	// The same error is also returned by Query or Lookup.
+	Error error
 	// StatusCode is the upstream HTTP status code.
 	StatusCode int
 	// Header is a clone of the upstream response headers.
 	Header http.Header
 	// Body contains the exact bytes read from the logical response body.
 	Body []byte
+	// Referral is the next recognized RDAP endpoint, if any.
+	Referral string
 	// Truncated reports that Body reached MaxResponseBytes.
 	Truncated bool
 }
 
-// Result contains a normalized resource query and its final response.
+// Result contains a normalized resource query and every completed lookup hop.
 type Result struct {
-	Query    string
+	// Query is the normalized resource passed to automatic lookup.
+	Query string
+	// Responses contains completed exchanges in traversal order. It may be
+	// non-empty when Lookup also returns an error from a later hop.
+	Responses []Response
+	// Response is the last retained response. Deprecated: use Responses.
 	Response Response
 }
 
@@ -51,6 +65,7 @@ type Result struct {
 type Limits struct {
 	OperationTimeout time.Duration
 	IdleTimeout      time.Duration
+	MaxHops          int
 	MaxRedirects     int
 	MaxQueryBytes    int
 	MaxResponseBytes int64
@@ -68,7 +83,7 @@ type Dialer interface {
 }
 
 // EndpointPolicy decides whether a service may be contacted at a resolved
-// address. It is evaluated for every resolved address and every redirect.
+// address. It is evaluated for every resolved address, redirect, and referral.
 type EndpointPolicy func(endpoint Endpoint, address netip.Addr) bool
 
 // Option configures a Client.
@@ -96,6 +111,7 @@ func NewClient(options ...Option) *Client {
 		limits: Limits{
 			OperationTimeout: defaultOperationTimeout,
 			IdleTimeout:      defaultIdleTimeout,
+			MaxHops:          defaultMaxHops,
 			MaxRedirects:     defaultMaxRedirects,
 			MaxQueryBytes:    defaultMaxQueryBytes,
 			MaxResponseBytes: defaultMaxResponseBytes,
@@ -137,7 +153,7 @@ func WithDirectEndpointPolicy(policy EndpointPolicy) Option {
 }
 
 // WithLookupEndpointPolicy replaces the policy used by Lookup and its
-// redirects.
+// redirects and referrals.
 func WithLookupEndpointPolicy(policy EndpointPolicy) Option {
 	return func(c *Client) {
 		if policy != nil {
@@ -154,6 +170,9 @@ func WithLimits(limits Limits) Option {
 		}
 		if limits.IdleTimeout > 0 {
 			c.limits.IdleTimeout = limits.IdleTimeout
+		}
+		if limits.MaxHops > 0 {
+			c.limits.MaxHops = limits.MaxHops
 		}
 		if limits.MaxRedirects > 0 {
 			c.limits.MaxRedirects = limits.MaxRedirects

@@ -51,6 +51,9 @@ import "foundry.fsky.io/fsky/whodis/rdap"
 
 client := rdap.NewClient()
 result, err := client.Lookup(ctx, "example.com")
+for _, response := range result.Responses {
+    fmt.Printf("%s returned %d bytes\n", response.URL, len(response.Body))
+}
 response, err := client.Query(ctx, "https://rdap.example/rdap/domain/example.com")
 ```
 
@@ -73,10 +76,12 @@ Direct queries permit caller-selected private endpoints, and both policies can
 be replaced with client options.
 
 RDAP `Lookup` discovers the service from the checked-in IANA bootstrap data,
-tries advertised alternatives, follows safe redirects, and validates successful
-responses as JSON. `Query` fetches an exact caller-selected HTTP(S) URL. It
-permits private endpoints by default, while automatic lookups only contact
-public addresses and pin validated DNS results when dialing.
+tries advertised alternatives, follows safe redirects and top-level registrar
+referrals, and validates successful responses as JSON. Like WHOIS, it retains
+completed responses in traversal order when a later referral fails. `Query`
+fetches an exact caller-selected HTTP(S) URL. It permits private endpoints by
+default, while automatic lookups only contact public addresses and pin
+validated DNS results when dialing.
 
 Both routing snapshots are compiled into the packages. Normal builds and tests
 perform no bootstrap downloads. Maintainers can refresh the checked-in data

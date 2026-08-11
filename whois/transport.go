@@ -26,8 +26,15 @@ func (c *Client) Query(ctx context.Context, endpoint Endpoint, query string) (Re
 	return response, err
 }
 
-func (c *Client) query(ctx context.Context, endpoint Endpoint, query string, policy EndpointPolicy) (Response, error) {
-	response := Response{Query: query}
+func (c *Client) query(ctx context.Context, endpoint Endpoint, query string, policy EndpointPolicy) (response Response, err error) {
+	started := time.Now()
+	response = Response{Query: query}
+	defer func() {
+		response.Duration = time.Since(started)
+		if err != nil {
+			response.Error = err
+		}
+	}()
 	if err := validateQuery(query, c.limits.MaxQueryBytes); err != nil {
 		return response, &OpError{Op: "validate", Endpoint: endpoint, Err: err}
 	}

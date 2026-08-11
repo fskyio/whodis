@@ -39,7 +39,7 @@
 	</header>
 
 	<main>
-		{{ if .Error }}
+		{{ if and .Error (not .Results) }}
 			<div class="error-message">
 				{{ .Error }}
 			</div>
@@ -48,27 +48,48 @@
 			<div class="notice-message">{{ .Notice }}</div>
 		{{ end }}
 
+		{{ if or .Results .LookupTime .CacheHit }}
+			<div class="lookup-meta">
+				{{ if .LookupTime }}
+					<span>Lookup completed in {{ .LookupTime }}{{ if .CacheHit }} (cached){{ end }}</span>
+				{{ end }}
+				{{ if .FetchedAt }}
+					<span>Fetched: {{ .FetchedAt }}</span>
+				{{ end }}
+			</div>
+		{{ end }}
+
 		{{ if .Results }}
 			{{ range .Results }}
-				<div class="result-meta">
-					<div class="source">
-						<span class="protocol-badge">{{ .Protocol }}</span>
-						{{ .SourceLabel }}: {{ .Source }}{{ if .Status }} · {{ .Status }}{{ end }}
+				<details class="result-hop{{ if .Error }} result-hop-failed{{ end }}" open>
+					<summary>
+						<span class="hop-summary">
+							<span class="hop-label">Hop {{ .Hop }}</span>
+							<span class="protocol-badge">{{ .Protocol }}</span>
+							<span class="hop-source">{{ .SourceLabel }}: {{ if .SourceURL }}<a href="{{ .SourceURL }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">{{ .Source }}</a>{{ else }}{{ .Source }}{{ end }}{{ if .Status }} · {{ .Status }}{{ end }}</span>
+							{{ if .Error }}<span class="hop-failure"><span aria-hidden="true">!</span> Failed</span>{{ end }}
+						</span>
+						{{ if .Duration }}<span class="hop-duration">{{ .Duration }}</span>{{ end }}
+					</summary>
+					<div class="result-hop-content">
+						{{ if .Error }}<div class="hop-error" role="alert"><strong>Request failed:</strong> {{ .Error }}</div>{{ end }}
+						{{ if .Warning }}<div class="result-warning">{{ .Warning }}</div>{{ end }}
+						{{ if or .Tokens .Body }}
+							<pre><code>{{ if .Tokens }}{{ range .Tokens }}{{ if .Class }}<span class="json-{{ .Class }}">{{ .Text }}</span>{{ else }}{{ .Text }}{{ end }}{{ end }}{{ else }}{{ .Body }}{{ end }}</code></pre>
+						{{ end }}
+						{{ if .RawBody }}
+							<details class="raw-response">
+								<summary>Raw JSON</summary>
+								<pre><code>{{ .RawBody }}</code></pre>
+							</details>
+						{{ end }}
 					</div>
-					{{ if $.FetchedAt }}
-						<div class="fetched-at">
-							Fetched: {{ $.FetchedAt }}
-						</div>
-					{{ end }}
+				</details>
+			{{ end }}
+			{{ if and .Error (not .HasFailedHop) }}
+				<div class="error-message">
+					{{ .Error }}
 				</div>
-				{{ if .Warning }}<div class="result-warning">{{ .Warning }}</div>{{ end }}
-				<pre><code>{{ if .Tokens }}{{ range .Tokens }}{{ if .Class }}<span class="json-{{ .Class }}">{{ .Text }}</span>{{ else }}{{ .Text }}{{ end }}{{ end }}{{ else }}{{ .Body }}{{ end }}</code></pre>
-				{{ if .RawBody }}
-					<details class="raw-response">
-						<summary>Raw JSON</summary>
-						<pre><code>{{ .RawBody }}</code></pre>
-					</details>
-				{{ end }}
 			{{ end }}
 		{{ else if not .Query }}
 			<div class="index-hero">

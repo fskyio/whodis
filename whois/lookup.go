@@ -64,9 +64,10 @@ func (c *Client) Lookup(ctx context.Context, query string) (Result, error) {
 		wireQuery := formatQuery(endpoint, target.query, target.kind)
 		response, queryErr := c.query(ctx, endpoint, wireQuery, c.lookupPolicy)
 		response.Referral = findReferral(endpoint, mode, response.Body)
-		if queryErr == nil || len(response.Body) > 0 || response.Truncated {
-			result.Responses = append(result.Responses, response)
-		}
+		// Retain failed exchanges as hops too. This preserves the endpoint and
+		// partial response metadata for callers that need to explain a failed
+		// referral, even when the server returned no body.
+		result.Responses = append(result.Responses, response)
 		if queryErr != nil {
 			return result, queryErr
 		}

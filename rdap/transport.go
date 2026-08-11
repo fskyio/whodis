@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Query fetches an exact caller-selected HTTP(S) URL. Private and nonstandard
@@ -24,8 +25,15 @@ func (c *Client) Query(ctx context.Context, rawURL string) (Response, error) {
 	return c.query(ctx, rawURL, c.directPolicy, false)
 }
 
-func (c *Client) query(ctx context.Context, rawURL string, policy EndpointPolicy, rejectDowngrade bool) (Response, error) {
-	response := Response{URL: rawURL}
+func (c *Client) query(ctx context.Context, rawURL string, policy EndpointPolicy, rejectDowngrade bool) (response Response, err error) {
+	started := time.Now()
+	response = Response{URL: rawURL}
+	defer func() {
+		response.Duration = time.Since(started)
+		if err != nil {
+			response.Error = err
+		}
+	}()
 	parsed, err := validateURL(rawURL)
 	if err != nil {
 		return response, &OpError{Op: "validate URL", URL: rawURL, Err: err}

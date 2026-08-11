@@ -13,10 +13,12 @@ func ExampleClient_Lookup() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	result, err := client.Lookup(ctx, "example.com")
-	if err != nil {
+	if err != nil && len(result.Responses) == 0 {
 		return
 	}
-	fmt.Printf("%s returned %d raw bytes\n", result.Response.URL, len(result.Response.Body))
+	for _, response := range result.Responses {
+		fmt.Printf("%s returned %d raw bytes\n", response.URL, len(response.Body))
+	}
 }
 
 func ExampleClient_Query() {

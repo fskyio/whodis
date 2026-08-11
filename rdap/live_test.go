@@ -22,7 +22,7 @@ func TestLiveLookup(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Lookup(%q): %v", query, err)
 			}
-			if len(result.Response.Body) == 0 {
+			if len(result.Responses) == 0 || len(result.Responses[len(result.Responses)-1].Body) == 0 {
 				t.Fatalf("Lookup(%q) returned no response body", query)
 			}
 		})

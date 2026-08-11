@@ -70,6 +70,21 @@ func TestRDAPFreshness(t *testing.T) {
 	}
 }
 
+func TestRDAPResponseChainUsesMostRestrictiveFreshness(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	responses := []rdap.Response{
+		{Header: http.Header{"Cache-Control": {"max-age=600"}}},
+		{Header: http.Header{"Cache-Control": {"max-age=120"}, "Age": {"20"}}},
+	}
+	if ttl, cacheable := rdapResponsesFreshness(responses, time.Hour, now); ttl != 100*time.Second || !cacheable {
+		t.Fatalf("rdapResponsesFreshness() = %v, %v; want 100s, true", ttl, cacheable)
+	}
+	responses[1].Header.Set("Cache-Control", "private")
+	if ttl, cacheable := rdapResponsesFreshness(responses, time.Hour, now); ttl != 0 || cacheable {
+		t.Fatalf("private response freshness = %v, %v; want 0, false", ttl, cacheable)
+	}
+}
+
 func TestAutoCancellationDoesNotFallBack(t *testing.T) {
 	rdapClient := &fakeRDAPClient{lookup: func(ctx context.Context, _ string) (rdap.Result, error) {
 		<-ctx.Done()

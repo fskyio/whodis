@@ -34,6 +34,9 @@ func TestQuerySendsCRLFAndPreservesResponse(t *testing.T) {
 	if response.Endpoint != endpoint {
 		t.Fatalf("Endpoint = %#v, want %#v", response.Endpoint, endpoint)
 	}
+	if response.Duration <= 0 {
+		t.Fatalf("response duration = %v, want positive duration", response.Duration)
+	}
 }
 
 func TestQueryResponseLimitReturnsExactPrefix(t *testing.T) {
@@ -51,6 +54,9 @@ func TestQueryResponseLimitReturnsExactPrefix(t *testing.T) {
 	}
 	if !response.Truncated || string(response.Body) != "abcd" {
 		t.Fatalf("response = %#v", response)
+	}
+	if response.Error == nil {
+		t.Fatal("response error = nil, want retained request error")
 	}
 }
 
@@ -264,8 +270,11 @@ func TestLookupReturnsCompletedHopWhenReferralFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Lookup() error = nil, want referral resolution failure")
 	}
-	if len(result.Responses) != 1 || result.Responses[0].Referral == nil {
+	if len(result.Responses) != 2 || result.Responses[0].Referral == nil {
 		t.Fatalf("result = %#v", result)
+	}
+	if result.Responses[1].Endpoint.Host != "missing.test" || result.Responses[1].Error == nil {
+		t.Fatalf("failed referral response = %#v", result.Responses[1])
 	}
 }
 

@@ -42,13 +42,20 @@ type pageData struct {
 	Error        string
 	Notice       string
 	FetchedAt    string
+	LookupTime   string
+	CacheHit     bool
+	HasFailedHop bool
 }
 
 type viewResult struct {
+	Hop         int
 	Protocol    string
 	SourceLabel string
 	Source      string
+	SourceURL   string
 	Status      string
+	Duration    string
+	Error       string
 	Tokens      []jsonToken
 	Body        string
 	RawBody     string
@@ -179,6 +186,8 @@ func (a *App) handleLookup(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Whodis-Cache", "HIT")
 		remaining := entry.ExpiresAt.Sub(a.now())
 		a.populatePage(&data, entry.Result, entry.FetchedAt)
+		data.LookupTime = formatDuration(lookupResultDuration(entry.Result))
+		data.CacheHit = true
 		a.renderPage(w, http.StatusOK, data, fmt.Sprintf("public, max-age=%d", int(remaining.Seconds())))
 		return
 	}
@@ -191,21 +200,25 @@ func (a *App) handleLookup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Whodis-Cache", "MISS")
+	lookupStarted := time.Now()
 	lookupCtx, cancel := context.WithTimeout(r.Context(), a.config.LookupTimeout)
 	result, lookupErr := a.performLookup(lookupCtx, query, mode)
 	cancel()
+	lookupTime := time.Since(lookupStarted)
 	if lookupErr != nil && (errorsIsCancellation(lookupErr) || r.Context().Err() != nil) {
 		return
 	}
 
 	fetchedAt := a.now()
 	cacheControl := "no-cache, no-store, must-revalidate"
+	result.Duration = lookupTime
 	if result.Cacheable && result.TTL > 0 {
 		entry := cacheEntry{Result: result, FetchedAt: fetchedAt, ExpiresAt: fetchedAt.Add(result.TTL)}
 		a.cache.Set(key, entry)
 		cacheControl = fmt.Sprintf("public, max-age=%d", int(result.TTL.Seconds()))
 	}
 	a.populatePage(&data, result, fetchedAt)
+	data.LookupTime = formatDuration(result.Duration)
 	a.renderPage(w, http.StatusOK, data, cacheControl)
 }
 
@@ -213,12 +226,16 @@ func (a *App) populatePage(data *pageData, result lookupResult, fetchedAt time.T
 	data.Error = result.Error
 	data.Notice = result.Notice
 	data.FetchedAt = fetchedAt.Format(time.RFC1123)
-	for _, item := range result.Items {
-		view := viewResult{Source: item.Source, Warning: item.Warning}
+	for hop, item := range result.Items {
+		view := viewResult{Hop: hop + 1, Source: item.Source, Duration: formatDuration(item.Duration), Error: item.Error, Warning: item.Warning}
+		if item.Error != "" {
+			data.HasFailedHop = true
+		}
 		switch item.Protocol {
 		case protocolRDAP:
 			view.Protocol = "RDAP"
 			view.SourceLabel = "Queried URL"
+			view.SourceURL = item.Source
 			if item.StatusCode != 0 {
 				view.Status = fmt.Sprintf("%d %s", item.StatusCode, http.StatusText(item.StatusCode))
 			}
@@ -240,6 +257,28 @@ func (a *App) populatePage(data *pageData, result lookupResult, fetchedAt time.T
 		}
 		data.Results = append(data.Results, view)
 	}
+}
+
+func formatDuration(duration time.Duration) string {
+	if duration < time.Second {
+		milliseconds := duration.Round(time.Millisecond) / time.Millisecond
+		if milliseconds < 1 {
+			milliseconds = 1
+		}
+		return fmt.Sprintf("%d ms", milliseconds)
+	}
+	return fmt.Sprintf("%.2f s", duration.Round(10*time.Millisecond).Seconds())
+}
+
+func lookupResultDuration(result lookupResult) time.Duration {
+	if result.Duration > 0 {
+		return result.Duration
+	}
+	var total time.Duration
+	for _, item := range result.Items {
+		total += item.Duration
+	}
+	return total
 }
 
 func newPageData(query string, mode protocol) pageData {

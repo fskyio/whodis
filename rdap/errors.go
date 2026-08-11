@@ -17,10 +17,17 @@ var (
 	ErrResponseTooLarge = errors.New("RDAP response exceeds the configured limit")
 	// ErrInvalidResponse reports invalid JSON in a successful response.
 	ErrInvalidResponse = errors.New("invalid RDAP JSON response")
+	// ErrReferralLoop indicates that a referral revisited an RDAP URL.
+	ErrReferralLoop = errors.New("RDAP referral loop")
+	// ErrTooManyReferrals indicates that traversal reached MaxHops while
+	// another referral remained.
+	ErrTooManyReferrals = errors.New("too many RDAP referrals")
 	// ErrTooManyRedirects reports a redirect limit violation.
 	ErrTooManyRedirects = errors.New("too many RDAP redirects")
 	// ErrInsecureRedirect reports an automatic HTTPS-to-HTTP downgrade.
 	ErrInsecureRedirect = errors.New("RDAP HTTPS redirect downgraded to HTTP")
+	// ErrInsecureReferral reports an automatic HTTPS-to-HTTP referral.
+	ErrInsecureReferral = errors.New("RDAP HTTPS referral downgraded to HTTP")
 )
 
 // NoServiceError records the resource for which discovery failed.

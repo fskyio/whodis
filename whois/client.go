@@ -46,6 +46,12 @@ func (e Endpoint) String() string {
 type Response struct {
 	// Endpoint is the normalized server that produced this response.
 	Endpoint Endpoint
+	// Duration is the time spent completing this logical TCP exchange,
+	// including DNS, connection setup, writing the query, and reading the body.
+	Duration time.Duration
+	// Error is the error encountered while completing the exchange, if any.
+	// The same error is also returned by Query or Lookup.
+	Error error
 	// Query is the exact query sent before the terminating CRLF.
 	Query string
 	// Body contains the bytes received before EOF or an error.

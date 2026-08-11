@@ -34,6 +34,9 @@ func TestQueryPreservesJSONAndMetadata(t *testing.T) {
 	if string(response.Body) != body || response.StatusCode != http.StatusOK || response.URL == "" || response.Header.Get("Cache-Control") != "max-age=60" {
 		t.Fatalf("response = %#v, body %q", response, response.Body)
 	}
+	if response.Duration <= 0 {
+		t.Fatalf("response duration = %v, want positive duration", response.Duration)
+	}
 }
 
 func TestQueryReturnsHTTPErrorWithBody(t *testing.T) {
@@ -47,6 +50,9 @@ func TestQueryReturnsHTTPErrorWithBody(t *testing.T) {
 	var httpErr *HTTPError
 	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusNotFound {
 		t.Fatalf("error = %#v", err)
+	}
+	if response.Error == nil {
+		t.Fatal("response error = nil, want retained request error")
 	}
 	if !strings.Contains(string(response.Body), `"custom"`) {
 		t.Fatalf("body = %q", response.Body)
@@ -189,6 +195,9 @@ func TestLookupTriesAlternateServiceAndDialsValidatedIP(t *testing.T) {
 	}
 	if !strings.Contains(result.Response.URL, "second.rdap.test") || !strings.Contains(string(result.Response.Body), "EXAMPLE.TEST") {
 		t.Fatalf("result = %#v", result)
+	}
+	if len(result.Responses) != 1 || result.Responses[0].StatusCode != http.StatusOK {
+		t.Fatalf("retained responses = %#v; failed alternatives must not appear in the traversal chain", result.Responses)
 	}
 	if got := dialer.Addresses(); len(got) != 2 || strings.Contains(strings.Join(got, ","), "rdap.test") {
 		t.Fatalf("dialed addresses = %#v; want two pinned IP literals", got)

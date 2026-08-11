@@ -16,7 +16,8 @@ const ianaRDAPBase = "https://rdap.iana.org/"
 
 // Lookup classifies a registration resource, discovers its service from the
 // compiled IANA bootstrap snapshot, tries advertised alternatives, follows
-// safe redirects, and validates successful responses as JSON.
+// safe redirects and domain referrals, and validates successful responses as
+// JSON. A non-empty Result may be returned with an error if a later hop fails.
 func (c *Client) Lookup(ctx context.Context, query string) (Result, error) {
 	parsed, err := target.Parse(query, c.limits.MaxQueryBytes)
 	result := Result{Query: parsed.Normalized}
@@ -36,18 +37,83 @@ func (c *Client) Lookup(ctx context.Context, query string) (Result, error) {
 	var attemptErrors []error
 	for _, rawURL := range urls {
 		response, queryErr := c.query(ctx, rawURL, c.lookupPolicy, true)
-		if response.URL != "" || len(response.Body) > 0 {
-			result.Response = response
-		}
+		result.Response = response
 		if queryErr == nil {
-			return result, nil
+			result.appendResponse(response)
+			return c.followReferrals(ctx, result, rawURL)
 		}
 		attemptErrors = append(attemptErrors, queryErr)
 		if ctx.Err() != nil || !retryAnotherService(queryErr) {
+			result.appendFailedResponse(response)
 			return result, queryErr
 		}
 	}
+	result.appendFailedResponse(result.Response)
 	return result, &OpError{Op: "lookup", Err: errors.Join(attemptErrors...)}
+}
+
+func (c *Client) followReferrals(ctx context.Context, result Result, initialURL string) (Result, error) {
+	seen := make(map[string]struct{}, c.limits.MaxHops*2)
+	current := &result.Responses[len(result.Responses)-1]
+	addSeenURL(seen, initialURL)
+	addSeenURL(seen, current.URL)
+
+	for len(result.Responses) <= c.limits.MaxHops {
+		referral, err := findReferral(current.URL, current.Body)
+		if err != nil {
+			return result, &OpError{Op: "follow referral", URL: current.URL, Err: err}
+		}
+		if referral == "" {
+			return result, nil
+		}
+		current.Referral = referral
+		result.Response = *current
+		referralKey, keyErr := referralURLKey(referral)
+		if keyErr != nil {
+			return result, &OpError{Op: "follow referral", URL: referral, Err: keyErr}
+		}
+		if _, exists := seen[referralKey]; exists {
+			return result, &OpError{Op: "follow referral", URL: referral, Err: ErrReferralLoop}
+		}
+		if len(result.Responses) == c.limits.MaxHops {
+			return result, &OpError{Op: "follow referral", URL: referral, Err: ErrTooManyReferrals}
+		}
+
+		response, queryErr := c.query(ctx, referral, c.lookupPolicy, true)
+		seen[referralKey] = struct{}{}
+		if key, keyErr := referralURLKey(response.URL); keyErr == nil {
+			if key != referralKey {
+				if _, exists := seen[key]; exists {
+					return result, &OpError{Op: "follow referral", URL: response.URL, Err: ErrReferralLoop}
+				}
+				seen[key] = struct{}{}
+			}
+		}
+		if queryErr != nil {
+			result.appendFailedResponse(response)
+			return result, queryErr
+		}
+		result.appendResponse(response)
+		current = &result.Responses[len(result.Responses)-1]
+	}
+	return result, nil
+}
+
+func (r *Result) appendResponse(response Response) {
+	r.Responses = append(r.Responses, response)
+	r.Response = response
+}
+
+func (r *Result) appendFailedResponse(response Response) {
+	if response.Error != nil || response.URL != "" || len(response.Body) > 0 || response.StatusCode != 0 || response.Truncated {
+		r.appendResponse(response)
+	}
+}
+
+func addSeenURL(seen map[string]struct{}, rawURL string) {
+	if key, err := referralURLKey(rawURL); err == nil {
+		seen[key] = struct{}{}
+	}
 }
 
 func lookupURLs(parsed target.Target) ([]string, string, error) {
