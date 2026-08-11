@@ -8,7 +8,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o whodis ./cmd/whodis
 
 
-FROM scratch
+FROM foundry.fsky.io/oci/scratch-ca-bundle:latest
 
 COPY --from=builder /src/whodis/whodis /usr/local/bin/whodis
 
