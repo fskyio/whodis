@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"foundry.fsky.io/fsky/whodis/internal/target"
+	"gitfield.org/fsky/whodis/internal/target"
 )
 
 func TestLookupURLs(t *testing.T) {

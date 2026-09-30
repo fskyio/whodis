@@ -2,7 +2,7 @@
 AutoUpdate=registry
 ContainerName=whodis
 DropCapability=ALL
-Image=foundry.fsky.io/fsky/whodis:latest
+Image=gitfield.org/fsky/whodis:latest
 LogDriver=none
 NoNewPrivileges=true
 PublishPort=12334:8080

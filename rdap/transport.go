@@ -60,7 +60,7 @@ func (c *Client) query(ctx context.Context, rawURL string, policy EndpointPolicy
 		return response, &OpError{Op: "create request", URL: rawURL, Err: err}
 	}
 	request.Header.Set("Accept", "application/rdap+json, application/json")
-	request.Header.Set("User-Agent", "whodis-rdap/1 (+https://foundry.fsky.io/fsky/whodis)")
+	request.Header.Set("User-Agent", "whodis-rdap/1 (+https://gitfield.org/fsky/whodis)")
 
 	httpResponse, err := client.Do(request)
 	if err != nil {
@@ -98,7 +98,7 @@ func redirectChecker(maxRedirects int, rejectDowngrade bool) func(*http.Request,
 			return ErrInsecureRedirect
 		}
 		request.Header.Set("Accept", "application/rdap+json, application/json")
-		request.Header.Set("User-Agent", "whodis-rdap/1 (+https://foundry.fsky.io/fsky/whodis)")
+		request.Header.Set("User-Agent", "whodis-rdap/1 (+https://gitfield.org/fsky/whodis)")
 		return nil
 	}
 }

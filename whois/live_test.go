@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"foundry.fsky.io/fsky/whodis/whois"
+	"gitfield.org/fsky/whodis/whois"
 )
 
 // TestLiveLookup is deliberately opt-in: public WHOIS services are rate

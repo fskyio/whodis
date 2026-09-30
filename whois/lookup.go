@@ -6,7 +6,7 @@ import (
 	"net/netip"
 	"strings"
 
-	"foundry.fsky.io/fsky/whodis/internal/target"
+	"gitfield.org/fsky/whodis/internal/target"
 )
 
 type resourceKind uint8

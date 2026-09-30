@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"foundry.fsky.io/fsky/whodis/rdap"
+	"gitfield.org/fsky/whodis/rdap"
 )
 
 func ExampleClient_Lookup() {

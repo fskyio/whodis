@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"foundry.fsky.io/fsky/whodis/whois"
+	"gitfield.org/fsky/whodis/whois"
 )
 
 func ExampleClient_Lookup() {

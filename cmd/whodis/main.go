@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"foundry.fsky.io/fsky/whodis/internal/web"
-	"foundry.fsky.io/fsky/whodis/rdap"
-	"foundry.fsky.io/fsky/whodis/whois"
+	"gitfield.org/fsky/whodis/internal/web"
+	"gitfield.org/fsky/whodis/rdap"
+	"gitfield.org/fsky/whodis/whois"
 )
 
 func main() {

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"foundry.fsky.io/fsky/whodis/rdap"
-	"foundry.fsky.io/fsky/whodis/whois"
+	"gitfield.org/fsky/whodis/rdap"
+	"gitfield.org/fsky/whodis/whois"
 )
 
 func TestParseProtocol(t *testing.T) {

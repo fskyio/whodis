@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"foundry.fsky.io/fsky/whodis/internal/target"
-	"foundry.fsky.io/fsky/whodis/rdap"
-	"foundry.fsky.io/fsky/whodis/whois"
+	"gitfield.org/fsky/whodis/internal/target"
+	"gitfield.org/fsky/whodis/rdap"
+	"gitfield.org/fsky/whodis/whois"
 )
 
 const errorCacheTTL = 5 * time.Minute
