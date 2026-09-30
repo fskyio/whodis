@@ -1,4 +1,4 @@
-module foundry.fsky.io/fsky/whodis
+module gitfield.org/fsky/whodis
 
 go 1.26.1
 

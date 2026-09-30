@@ -16,7 +16,7 @@ the application does not require browser JavaScript.
 ### Container (recommended)
 
 ```sh
-docker run -p 8080:8080 foundry.fsky.io/fsky/whodis:latest
+docker run -p 8080:8080 gitfield.org/fsky/whodis:latest
 ```
 
 A [Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html) unit file is available at [`contrib/quadlet/whodis.container`](contrib/quadlet/whodis.container) for deploying with Podman and systemd.
@@ -38,7 +38,7 @@ The protocol clients are importable without pulling the web application into
 your program:
 
 ```go
-import "foundry.fsky.io/fsky/whodis/whois"
+import "gitfield.org/fsky/whodis/whois"
 
 client := whois.NewClient()
 result, err := client.Lookup(ctx, "example.com")
@@ -47,7 +47,7 @@ result, err := client.Lookup(ctx, "example.com")
 RDAP exposes the same raw-response style of API:
 
 ```go
-import "foundry.fsky.io/fsky/whodis/rdap"
+import "gitfield.org/fsky/whodis/rdap"
 
 client := rdap.NewClient()
 result, err := client.Lookup(ctx, "example.com")

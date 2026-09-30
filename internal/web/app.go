@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"foundry.fsky.io/fsky/whodis/internal/target"
+	"gitfield.org/fsky/whodis/internal/target"
 )
 
 //go:embed templates/* static/*

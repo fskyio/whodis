@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"foundry.fsky.io/fsky/whodis/rdap"
+	"gitfield.org/fsky/whodis/rdap"
 )
 
 func TestLiveLookup(t *testing.T) {

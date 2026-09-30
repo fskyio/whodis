@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"foundry.fsky.io/fsky/whodis/internal/target"
+	"gitfield.org/fsky/whodis/internal/target"
 )
 
 const ianaRDAPBase = "https://rdap.iana.org/"

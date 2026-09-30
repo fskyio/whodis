@@ -370,7 +370,7 @@ func fetch(ctx context.Context, client *http.Client, source string) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
-	request.Header.Set("User-Agent", "whodis-data-updater/1 (+https://foundry.fsky.io/fsky/whodis)")
+	request.Header.Set("User-Agent", "whodis-data-updater/1 (+https://gitfield.org/fsky/whodis)")
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", source, err)
