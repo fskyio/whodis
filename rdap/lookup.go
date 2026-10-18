@@ -15,9 +15,10 @@ import (
 const ianaRDAPBase = "https://rdap.iana.org/"
 
 // Lookup classifies a registration resource, discovers its service from the
-// compiled IANA bootstrap snapshot, tries advertised alternatives, follows
-// safe redirects and domain referrals, and validates successful responses as
-// JSON. A non-empty Result may be returned with an error if a later hop fails.
+// compiled IANA bootstrap snapshot or the supplemental registry list, tries
+// advertised alternatives, follows safe redirects and domain referrals, and
+// validates successful responses as JSON. A non-empty Result may be returned
+// with an error if a later hop fails.
 func (c *Client) Lookup(ctx context.Context, query string) (Result, error) {
 	parsed, err := target.Parse(query, c.limits.MaxQueryBytes)
 	result := Result{Query: parsed.Normalized}

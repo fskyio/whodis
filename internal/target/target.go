@@ -72,7 +72,11 @@ func Parse(input string, maxBytes int) (Target, error) {
 		return applyTransitionAddress(target), nil
 	}
 
-	if asn, ok := parseASN(trimmed); ok {
+	asn, ok, err := parseASN(trimmed)
+	if err != nil {
+		return target, err
+	}
+	if ok {
 		target.Kind = ASN
 		target.ASN = asn
 		target.Query = "AS" + strconv.FormatUint(uint64(asn), 10)
@@ -90,8 +94,14 @@ func Parse(input string, maxBytes int) (Target, error) {
 	}
 	ascii, err := idna.Lookup.ToASCII(domainInput)
 	if err == nil {
+		name := strings.ToLower(ascii)
+		if strings.Contains(name, ".") {
+			if err := validateDomainLength(name); err != nil {
+				return target, err
+			}
+		}
 		target.Kind = Name
-		target.NameASCII = strings.ToLower(ascii)
+		target.NameASCII = name
 		return target, nil
 	}
 	if strings.Contains(domainInput, ".") {
@@ -116,20 +126,42 @@ func validate(query string, maxBytes int) error {
 	return nil
 }
 
-func parseASN(value string) (uint32, bool) {
+// parseASN recognizes "AS" followed by a decimal number. Digits that overflow
+// 32 bits are reported as an error rather than treated as a handle.
+func parseASN(value string) (uint32, bool, error) {
 	value = strings.TrimSpace(value)
 	if len(value) < 3 || !strings.EqualFold(value[:2], "as") {
-		return 0, false
+		return 0, false, nil
 	}
 	number := strings.TrimSpace(value[2:])
 	if number == "" {
-		return 0, false
+		return 0, false, nil
 	}
 	parsed, err := strconv.ParseUint(number, 10, 32)
-	if err != nil {
-		return 0, false
+	if errors.Is(err, strconv.ErrRange) {
+		return 0, false, fmt.Errorf("%w: AS number %s exceeds 4294967295", ErrInvalid, number)
 	}
-	return uint32(parsed), true
+	if err != nil {
+		return 0, false, nil
+	}
+	return uint32(parsed), true, nil
+}
+
+// validateDomainLength enforces the DNS limits that IDNA lookup mapping does
+// not: no empty labels, at most 63 bytes per label and 253 bytes in total.
+func validateDomainLength(name string) error {
+	if len(name) > 253 {
+		return fmt.Errorf("%w: domain name is longer than 253 characters", ErrInvalid)
+	}
+	for label := range strings.SplitSeq(name, ".") {
+		if label == "" {
+			return fmt.Errorf("%w: domain name has an empty label", ErrInvalid)
+		}
+		if len(label) > 63 {
+			return fmt.Errorf("%w: domain label is longer than 63 characters", ErrInvalid)
+		}
+	}
+	return nil
 }
 
 func parseReverseName(value string) (netip.Addr, netip.Prefix, bool) {

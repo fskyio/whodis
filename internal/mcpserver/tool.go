@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -41,7 +42,7 @@ var lookupTool = &mcp.Tool{
 
 Auto mode queries RDAP, follows registry-to-registrar referrals, and falls back to WHOIS only when RDAP is unavailable. Prefer it: WHOIS output is unstructured, and some registries return very large WHOIS records.
 
-The result is JSON. "hops" lists every server queried, in order. RDAP bodies are JSON objects with the notices, links and rdapConformance members removed (set raw to keep them); WHOIS bodies are text. A body over 32 KiB is cut off and marked "truncated", and a body identical to an earlier hop's is replaced by "same_as_hop". "error" summarizes a failed lookup and "notice" explains a WHOIS fallback. Results can come from a cache; "fetched_at" is when the data was retrieved. "web_url", when present, opens the complete result in a browser.`,
+The result is JSON. "status" is "ok", "not_found" (the registry reports that no such object exists), "partial" (some servers answered, but a later referral failed) or "failed". "hops" lists every server queried, in order. RDAP bodies are JSON objects with the notices, links and rdapConformance members removed (set raw to keep them); WHOIS bodies are text. A body over 32 KiB is cut off and marked "truncated", and a body identical to an earlier hop's is replaced by "same_as_hop". "error" summarizes a failed lookup and "notice" explains a WHOIS fallback. Results can come from a cache; "fetched_at" is when the data was retrieved. "web_url", when present, opens the complete result in a browser.`,
 	InputSchema: &jsonschema.Schema{
 		Type: "object",
 		Properties: map[string]*jsonschema.Schema{
@@ -73,9 +74,20 @@ The result is JSON. "hops" lists every server queried, in order. RDAP bodies are
 	},
 }
 
+// Lookup statuses summarize a result so agents need not inspect every hop. A
+// WHOIS "no match" reply is free text and cannot be told apart reliably, so it
+// is reported as statusOK.
+const (
+	statusOK       = "ok"
+	statusNotFound = "not_found"
+	statusPartial  = "partial"
+	statusFailed   = "failed"
+)
+
 type envelope struct {
 	Query     string `json:"query"`
 	Protocol  string `json:"protocol"`
+	Status    string `json:"status"`
 	FetchedAt string `json:"fetched_at"`
 	CacheHit  bool   `json:"cache_hit"`
 	Notice    string `json:"notice,omitempty"`
@@ -87,7 +99,7 @@ type envelope struct {
 type hop struct {
 	Protocol   string `json:"protocol"`
 	Source     string `json:"source,omitempty"`
-	Status     int    `json:"status,omitempty"`
+	HTTPStatus int    `json:"http_status,omitempty"`
 	DurationMS int64  `json:"duration_ms"`
 	Error      string `json:"error,omitempty"`
 	Warning    string `json:"warning,omitempty"`
@@ -138,6 +150,7 @@ func newEnvelope(query string, protocol lookup.Protocol, outcome lookup.Outcome,
 	output := envelope{
 		Query:     query,
 		Protocol:  string(protocol),
+		Status:    lookupStatus(result),
 		FetchedAt: outcome.FetchedAt.UTC().Format(time.RFC3339),
 		CacheHit:  outcome.CacheHit,
 		Notice:    result.Notice,
@@ -151,7 +164,7 @@ func newEnvelope(query string, protocol lookup.Protocol, outcome lookup.Outcome,
 		entry := hop{
 			Protocol:   string(item.Protocol),
 			Source:     item.Source,
-			Status:     item.StatusCode,
+			HTTPStatus: item.StatusCode,
 			DurationMS: item.Duration.Milliseconds(),
 			Error:      item.Error,
 			Warning:    item.Warning,
@@ -167,6 +180,33 @@ func newEnvelope(query string, protocol lookup.Protocol, outcome lookup.Outcome,
 		output.Hops = append(output.Hops, entry)
 	}
 	return output
+}
+
+func lookupStatus(result lookup.Result) string {
+	if result.Error == "" {
+		return statusOK
+	}
+	for _, item := range result.Items {
+		if returnedData(item) {
+			return statusPartial
+		}
+	}
+	if last := len(result.Items) - 1; last >= 0 && result.Items[last].Protocol == lookup.RDAP && result.Items[last].StatusCode == http.StatusNotFound {
+		return statusNotFound
+	}
+	return statusFailed
+}
+
+// returnedData reports whether a hop completed with registration data: a
+// successful RDAP JSON document or a WHOIS reply that did not fail.
+func returnedData(item lookup.Item) bool {
+	if item.Error != "" || len(item.Body) == 0 {
+		return false
+	}
+	if item.Protocol == lookup.WHOIS {
+		return true
+	}
+	return item.JSON && item.StatusCode >= http.StatusOK && item.StatusCode < http.StatusMultipleChoices
 }
 
 // encodeBody returns the JSON encoding of an item's body, whether it was

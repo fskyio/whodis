@@ -12,6 +12,7 @@ import (
 func TestLookupURLs(t *testing.T) {
 	oldTLDs := generatedTLDs
 	oldDNS := generatedDNSRoutes
+	oldSupplementalDNS := supplementalDNSRoutes
 	oldIPv4 := generatedIPv4Routes
 	oldIPv6 := generatedIPv6Routes
 	oldASNs := generatedASNRoutes
@@ -19,6 +20,7 @@ func TestLookupURLs(t *testing.T) {
 	t.Cleanup(func() {
 		generatedTLDs = oldTLDs
 		generatedDNSRoutes = oldDNS
+		supplementalDNSRoutes = oldSupplementalDNS
 		generatedIPv4Routes = oldIPv4
 		generatedIPv6Routes = oldIPv6
 		generatedASNRoutes = oldASNs
@@ -29,6 +31,10 @@ func TestLookupURLs(t *testing.T) {
 		"com":         {"http://rdap.test/", "https://rdap.test/v1/"},
 		"private.com": {"https://longest.test/"},
 		"example":     {"https://idn.test/"},
+		"shadowed.st": {"https://iana.test/"},
+	}
+	supplementalDNSRoutes = map[string][]string{
+		"st": {"https://supplemental.test/st/"},
 	}
 	generatedIPv4Routes = []networkRoute{
 		{Prefix: netip.MustParsePrefix("192.0.2.0/24"), URLs: []string{"https://specific.test/"}},
@@ -45,6 +51,8 @@ func TestLookupURLs(t *testing.T) {
 		{"example.com", []string{"https://rdap.test/v1/domain/example.com", "http://rdap.test/domain/example.com"}},
 		{"www.private.com", []string{"https://longest.test/domain/www.private.com"}},
 		{"bücher.example", []string{"https://idn.test/domain/xn--bcher-kva.example"}},
+		{"example.st", []string{"https://supplemental.test/st/domain/example.st"}},
+		{"www.shadowed.st", []string{"https://iana.test/domain/www.shadowed.st"}},
 		{"com", []string{"https://rdap.iana.org/domain/com"}},
 		{"192.0.2.42", []string{"https://specific.test/ip/192.0.2.42"}},
 		{"192.0.2.99/24", []string{"https://specific.test/ip/192.0.2.0/24"}},
@@ -85,6 +93,14 @@ func TestGeneratedDataInvariants(t *testing.T) {
 	for name, urls := range generatedDNSRoutes {
 		if name == "" || len(urls) == 0 {
 			t.Errorf("invalid DNS route %q: %#v", name, urls)
+		}
+	}
+	for name, urls := range supplementalDNSRoutes {
+		if len(generatedDNSRoutes[name]) > 0 {
+			t.Errorf("supplemental DNS route %q is now in the IANA snapshot; remove it", name)
+		}
+		if !generatedTLDs[name] || len(urls) == 0 {
+			t.Errorf("invalid supplemental DNS route %q: %#v", name, urls)
 		}
 	}
 	for label, routes := range map[string][]networkRoute{"IPv4": generatedIPv4Routes, "IPv6": generatedIPv6Routes} {

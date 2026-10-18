@@ -42,7 +42,9 @@ URL for hosted assistants; terminate TLS at your reverse proxy.
 
 The server provides one read-only tool, `lookup`, with the same Auto, RDAP, and
 WHOIS modes as the web UI. Results are compact JSON with one entry per queried
-server. To keep the assistant's context small, RDAP documents omit their
+server and a `status` of `ok`, `not_found` (an authoritative RDAP 404),
+`partial` (a later referral failed after an earlier server answered), or
+`failed`. To keep the assistant's context small, RDAP documents omit their
 `notices`, `links`, and `rdapConformance` members unless the tool is called
 with `raw: true`, each body is capped at 32 KiB, and a body repeated by a later
 referral is only included once. Both front ends share one cache.
@@ -115,6 +117,11 @@ completed responses in traversal order when a later referral fails. `Query`
 fetches an exact caller-selected HTTP(S) URL. It permits private endpoints by
 default, while automatic lookups only contact public addresses and pin
 validated DNS results when dialing.
+
+Some ccTLD registries run RDAP services that are not listed in the IANA
+bootstrap registry. A short hand-maintained list in `rdap/data.go` (currently
+`.co`, `.de`, and `.io`) is consulted only when IANA has no service for a
+domain, and a test fails once a refreshed snapshot makes an entry redundant.
 
 Both routing snapshots are compiled into the packages. Normal builds and tests
 perform no bootstrap downloads. Maintainers can refresh the checked-in data

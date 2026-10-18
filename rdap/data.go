@@ -20,11 +20,23 @@ type asnRoute struct {
 	URLs  []string
 }
 
+// supplementalDNSRoutes lists working registry RDAP services that are absent
+// from the IANA bootstrap registry, which only gTLDs are required to use. They
+// are consulted only when no IANA route matches, so a registry that registers
+// with IANA takes over on the next snapshot refresh.
+var supplementalDNSRoutes = map[string][]string{
+	"co": {"https://rdap.registry.co/co/"},
+	"de": {"https://rdap.denic.de/"},
+	"io": {"https://rdap.identitydigital.services/rdap/"},
+}
+
 func findDomainURLs(domain string) []string {
 	labels := strings.Split(domain, ".")
-	for index := 0; index < len(labels); index++ {
-		if values := generatedDNSRoutes[strings.Join(labels[index:], ".")]; len(values) > 0 {
-			return orderedURLs(values)
+	for _, routes := range []map[string][]string{generatedDNSRoutes, supplementalDNSRoutes} {
+		for index := range labels {
+			if values := routes[strings.Join(labels[index:], ".")]; len(values) > 0 {
+				return orderedURLs(values)
+			}
 		}
 	}
 	return nil

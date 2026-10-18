@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +20,41 @@ import (
 )
 
 const testToken = "0123456789abcdef0123456789abcdef"
+
+func TestLookupStatusDistinguishesMissingPartialAndFailedLookups(t *testing.T) {
+	registry := rdap.Response{URL: "https://rdap.example/domain/example.com", StatusCode: http.StatusOK, Body: []byte(`{"handle":"REGISTRY"}`)}
+	for _, test := range []struct {
+		name  string
+		rdap  *lookuptest.RDAPClient
+		whois *lookuptest.WHOISClient
+		want  string
+	}{
+		{"found", &lookuptest.RDAPClient{Result: rdap.Result{Responses: []rdap.Response{registry}}}, &lookuptest.WHOISClient{}, statusOK},
+		{"registry has no such object", &lookuptest.RDAPClient{
+			Result: rdap.Result{Responses: []rdap.Response{{URL: "https://rdap.example/domain/missing.com", StatusCode: http.StatusNotFound, Body: []byte(`{"errorCode":404}`)}}},
+			Err:    &rdap.HTTPError{StatusCode: http.StatusNotFound, Status: "404 Not Found"},
+		}, &lookuptest.WHOISClient{}, statusNotFound},
+		{"registrar referral failed", &lookuptest.RDAPClient{
+			Result: rdap.Result{Responses: []rdap.Response{registry, {URL: "https://registrar.example/domain/example.com", StatusCode: http.StatusNotFound, Body: []byte(`{"errorCode":404}`)}}},
+			Err:    &rdap.HTTPError{StatusCode: http.StatusNotFound, Status: "404 Not Found"},
+		}, &lookuptest.WHOISClient{}, statusPartial},
+		{"WHOIS registrar refused", &lookuptest.RDAPClient{Err: rdap.ErrNoService}, &lookuptest.WHOISClient{
+			Result: whois.Result{Responses: []whois.Response{
+				{Endpoint: whois.Endpoint{Host: "whois.registry.test"}, Body: []byte("Registrar WHOIS Server: whois.registrar.test")},
+				{Endpoint: whois.Endpoint{Host: "whois.registrar.test"}, Error: errors.New("connection refused")},
+			}},
+			Err: errors.New("connection refused"),
+		}, statusPartial},
+		{"nothing answered", &lookuptest.RDAPClient{Err: rdap.ErrNoService}, &lookuptest.WHOISClient{Err: errors.New("connection refused")}, statusFailed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := newTestServer(t, test.rdap, test.whois, Config{})
+			if result := callLookup(t, server.URL+Path, nil, map[string]any{"query": "example.com"}); result.Status != test.want {
+				t.Fatalf("status = %q, want %q; result = %+v", result.Status, test.want, result)
+			}
+		})
+	}
+}
 
 func TestLookupTrimsRDAPBoilerplateUnlessRawIsRequested(t *testing.T) {
 	rdapClient := &lookuptest.RDAPClient{Result: rdap.Result{Query: "example.com", Responses: []rdap.Response{{
