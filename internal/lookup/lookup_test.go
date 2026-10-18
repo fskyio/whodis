@@ -1,4 +1,4 @@
-package web
+package lookup
 
 import (
 	"context"
@@ -7,18 +7,19 @@ import (
 	"testing"
 	"time"
 
+	"gitfield.org/fsky/whodis/internal/lookup/lookuptest"
 	"gitfield.org/fsky/whodis/rdap"
 	"gitfield.org/fsky/whodis/whois"
 )
 
 func TestParseProtocol(t *testing.T) {
-	for input, want := range map[string]protocol{"": protocolAuto, "auto": protocolAuto, " RDAP ": protocolRDAP, "WHOIS": protocolWHOIS} {
-		got, err := parseProtocol(input)
+	for input, want := range map[string]Protocol{"": Auto, "auto": Auto, " RDAP ": RDAP, "WHOIS": WHOIS} {
+		got, err := ParseProtocol(input)
 		if err != nil || got != want {
-			t.Errorf("parseProtocol(%q) = %q, %v; want %q", input, got, err, want)
+			t.Errorf("ParseProtocol(%q) = %q, %v; want %q", input, got, err, want)
 		}
 	}
-	if _, err := parseProtocol("dns"); err == nil {
+	if _, err := ParseProtocol("dns"); err == nil {
 		t.Fatal("unknown protocol was accepted")
 	}
 }
@@ -86,83 +87,71 @@ func TestRDAPResponseChainUsesMostRestrictiveFreshness(t *testing.T) {
 }
 
 func TestAutoCancellationDoesNotFallBack(t *testing.T) {
-	rdapClient := &fakeRDAPClient{lookup: func(ctx context.Context, _ string) (rdap.Result, error) {
+	rdapClient := &lookuptest.RDAPClient{LookupFunc: func(ctx context.Context, _ string) (rdap.Result, error) {
 		<-ctx.Done()
 		return rdap.Result{}, ctx.Err()
 	}}
-	whoisClient := &fakeWHOISClient{}
-	app := newTestApp(t, whoisClient, rdapClient)
+	whoisClient := &lookuptest.WHOISClient{}
+	service := newTestService(t, whoisClient, rdapClient)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := app.performLookup(ctx, "example.com", protocolAuto)
+	_, err := service.perform(ctx, "example.com", Auto)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
 	}
-	if whoisClient.calls != 0 {
-		t.Fatalf("WHOIS calls = %d", whoisClient.calls)
+	if whoisClient.Calls() != 0 {
+		t.Fatalf("WHOIS calls = %d", whoisClient.Calls())
 	}
 }
 
 func TestAutoRDAPBudgetExpirationFallsBack(t *testing.T) {
-	rdapClient := &fakeRDAPClient{lookup: func(ctx context.Context, _ string) (rdap.Result, error) {
+	rdapClient := &lookuptest.RDAPClient{LookupFunc: func(ctx context.Context, _ string) (rdap.Result, error) {
 		<-ctx.Done()
 		return rdap.Result{}, ctx.Err()
 	}}
-	whoisClient := &fakeWHOISClient{result: whois.Result{Responses: []whois.Response{{Endpoint: whois.Endpoint{Host: "whois.example"}, Body: []byte("fallback")}}}}
-	app := newTestApp(t, whoisClient, rdapClient)
-	app.config.RDAPAutoTimeout = 10 * time.Millisecond
+	whoisClient := &lookuptest.WHOISClient{Result: whois.Result{Responses: []whois.Response{{Endpoint: whois.Endpoint{Host: "whois.example"}, Body: []byte("fallback")}}}}
+	service := newTestService(t, whoisClient, rdapClient)
+	service.config.RDAPAutoTimeout = 10 * time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	result, err := app.performLookup(ctx, "example.com", protocolAuto)
+	result, err := service.perform(ctx, "example.com", Auto)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if whoisClient.calls != 1 || len(result.Items) != 1 || result.Items[0].Protocol != protocolWHOIS {
-		t.Fatalf("result = %#v, WHOIS calls = %d", result, whoisClient.calls)
+	if whoisClient.Calls() != 1 || len(result.Items) != 1 || result.Items[0].Protocol != WHOIS {
+		t.Fatalf("result = %#v, WHOIS calls = %d", result, whoisClient.Calls())
 	}
 }
 
-type fakeRDAPClient struct {
-	result rdap.Result
-	err    error
-	lookup func(context.Context, string) (rdap.Result, error)
-	calls  int
-}
-
-func (c *fakeRDAPClient) Lookup(ctx context.Context, query string) (rdap.Result, error) {
-	c.calls++
-	if c.lookup != nil {
-		return c.lookup(ctx, query)
+func TestRateLimiterReportsTimeUntilNextToken(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	limiter := NewRateLimiter(60, 1)
+	limiter.now = func() time.Time { return now }
+	if _, allowed := limiter.Allow("client"); !allowed {
+		t.Fatal("first request was rejected")
 	}
-	return c.result, c.err
-}
-
-type fakeWHOISClient struct {
-	result whois.Result
-	err    error
-	lookup func(context.Context, string) (whois.Result, error)
-	calls  int
-}
-
-func (c *fakeWHOISClient) Lookup(ctx context.Context, query string) (whois.Result, error) {
-	c.calls++
-	if c.lookup != nil {
-		return c.lookup(ctx, query)
+	now = now.Add(250 * time.Millisecond)
+	if retryAfter, allowed := limiter.Allow("client"); allowed || retryAfter != 750*time.Millisecond {
+		t.Fatalf("Allow() = %v, %v; want 750ms, false", retryAfter, allowed)
 	}
-	return c.result, c.err
+	if _, allowed := limiter.Allow("other"); !allowed {
+		t.Fatal("independent key was rejected")
+	}
+	var disabled *RateLimiter
+	if _, allowed := disabled.Allow("client"); !allowed {
+		t.Fatal("nil limiter rejected a request")
+	}
 }
 
-func newTestApp(t *testing.T, whoisClient whoisLookupClient, rdapClient rdapLookupClient) *App {
+func newTestService(t *testing.T, whoisClient WHOISClient, rdapClient RDAPClient) *Service {
 	t.Helper()
-	config := Config{
+	service, err := NewService(Config{
 		CacheTTL:        time.Hour,
 		LookupTimeout:   time.Second,
 		RDAPAutoTimeout: 100 * time.Millisecond,
-	}
-	app, err := New(config, whoisClient, rdapClient)
+	}, whoisClient, rdapClient)
 	if err != nil {
 		t.Fatal(err)
 	}
-	app.logf = t.Logf
-	return app
+	return service
 }

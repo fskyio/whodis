@@ -1,4 +1,4 @@
-package web
+package lookup
 
 import (
 	"sync"
@@ -6,7 +6,7 @@ import (
 )
 
 type cacheEntry struct {
-	Result    lookupResult
+	Result    Result
 	ExpiresAt time.Time
 	FetchedAt time.Time
 }

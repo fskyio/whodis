@@ -9,13 +9,15 @@ import (
 	"testing"
 	"time"
 
+	"gitfield.org/fsky/whodis/internal/lookup"
+	"gitfield.org/fsky/whodis/internal/lookup/lookuptest"
 	"gitfield.org/fsky/whodis/rdap"
 	"gitfield.org/fsky/whodis/whois"
 )
 
 func TestLookupDefaultsToAutoAndRendersCompleteRDAPJSON(t *testing.T) {
 	body := []byte(`{"handle":"EXAMPLE","extension":{"unknown":true},"unsafe":"<script>alert(1)</script>"}`)
-	rdapClient := &fakeRDAPClient{result: rdap.Result{
+	rdapClient := &lookuptest.RDAPClient{Result: rdap.Result{
 		Query: "example.com",
 		Response: rdap.Response{
 			URL:        "https://rdap.example/domain/example.com",
@@ -24,7 +26,7 @@ func TestLookupDefaultsToAutoAndRendersCompleteRDAPJSON(t *testing.T) {
 			Body:       body,
 		},
 	}}
-	whoisClient := &fakeWHOISClient{}
+	whoisClient := &lookuptest.WHOISClient{}
 	app := newTestApp(t, whoisClient, rdapClient)
 
 	recorder := httptest.NewRecorder()
@@ -41,20 +43,20 @@ func TestLookupDefaultsToAutoAndRendersCompleteRDAPJSON(t *testing.T) {
 	if strings.Contains(page, "<script>alert(1)</script>") {
 		t.Fatal("untrusted JSON was rendered as HTML")
 	}
-	if whoisClient.calls != 0 {
-		t.Fatalf("WHOIS calls = %d", whoisClient.calls)
+	if whoisClient.Calls() != 0 {
+		t.Fatalf("WHOIS calls = %d", whoisClient.Calls())
 	}
 }
 
 func TestLookupRendersEachHopOpenWithItsDuration(t *testing.T) {
-	rdapClient := &fakeRDAPClient{result: rdap.Result{
+	rdapClient := &lookuptest.RDAPClient{Result: rdap.Result{
 		Query: "example.com",
 		Responses: []rdap.Response{
 			{URL: "https://registry.example/domain/example.com", StatusCode: http.StatusOK, Duration: 184 * time.Millisecond, Body: []byte(`{"handle":"REGISTRY"}`)},
 			{URL: "https://registrar.example/domain/example.com", StatusCode: http.StatusOK, Duration: 1250 * time.Millisecond, Body: []byte(`{"handle":"REGISTRAR"}`)},
 		},
 	}}
-	app := newTestApp(t, &fakeWHOISClient{}, rdapClient)
+	app := newTestApp(t, &lookuptest.WHOISClient{}, rdapClient)
 	recorder := httptest.NewRecorder()
 	app.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/lookup?q=example.com&protocol=rdap", nil))
 
@@ -70,16 +72,16 @@ func TestLookupRendersEachHopOpenWithItsDuration(t *testing.T) {
 }
 
 func TestFailedRDAPHopRendersEndpointErrorAndFailureState(t *testing.T) {
-	rdapClient := &fakeRDAPClient{
-		result: rdap.Result{Response: rdap.Response{
+	rdapClient := &lookuptest.RDAPClient{
+		Result: rdap.Result{Response: rdap.Response{
 			URL:        "https://bad.example/domain/example.com",
 			StatusCode: http.StatusBadGateway,
 			Duration:   1250 * time.Millisecond,
 			Body:       []byte(`{"errorCode":502}`),
 		}},
-		err: &rdap.HTTPError{StatusCode: http.StatusBadGateway, Status: "502 Bad Gateway"},
+		Err: &rdap.HTTPError{StatusCode: http.StatusBadGateway, Status: "502 Bad Gateway"},
 	}
-	app := newTestApp(t, &fakeWHOISClient{}, rdapClient)
+	app := newTestApp(t, &lookuptest.WHOISClient{}, rdapClient)
 	recorder := httptest.NewRecorder()
 	app.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/lookup?q=example.com&protocol=rdap", nil))
 
@@ -95,15 +97,15 @@ func TestFailedRDAPHopRendersEndpointErrorAndFailureState(t *testing.T) {
 }
 
 func TestFailedWHOISHopWithoutBodyRendersEndpointAndError(t *testing.T) {
-	whoisClient := &fakeWHOISClient{
-		result: whois.Result{Responses: []whois.Response{{
+	whoisClient := &lookuptest.WHOISClient{
+		Result: whois.Result{Responses: []whois.Response{{
 			Endpoint: whois.Endpoint{Host: "whois.failed.test"},
 			Duration: 2 * time.Second,
 			Error:    errors.New("connection refused"),
 		}}},
-		err: errors.New("connection refused"),
+		Err: errors.New("connection refused"),
 	}
-	app := newTestApp(t, whoisClient, &fakeRDAPClient{})
+	app := newTestApp(t, whoisClient, &lookuptest.RDAPClient{})
 	recorder := httptest.NewRecorder()
 	app.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/lookup?q=example.com&protocol=whois", nil))
 
@@ -119,7 +121,7 @@ func TestFailedWHOISHopWithoutBodyRendersEndpointAndError(t *testing.T) {
 }
 
 func TestOpenSearchDescriptionUsesRequestOrigin(t *testing.T) {
-	app := newTestApp(t, &fakeWHOISClient{}, &fakeRDAPClient{})
+	app := newTestApp(t, &lookuptest.WHOISClient{}, &lookuptest.RDAPClient{})
 	request := httptest.NewRequest(http.MethodGet, "http://who.dis.test/opensearch.xml", nil)
 	recorder := httptest.NewRecorder()
 	app.Handler().ServeHTTP(recorder, request)
@@ -143,8 +145,7 @@ func TestOpenSearchDescriptionUsesRequestOrigin(t *testing.T) {
 }
 
 func TestOpenSearchDescriptionUsesForwardedHTTPSWhenTrusted(t *testing.T) {
-	app := newTestApp(t, &fakeWHOISClient{}, &fakeRDAPClient{})
-	app.config.TrustProxyHeaders = true
+	app := newConfiguredTestApp(t, &lookuptest.WHOISClient{}, &lookuptest.RDAPClient{}, nil, Config{TrustProxyHeaders: true})
 	request := httptest.NewRequest(http.MethodGet, "/opensearch.xml", nil)
 	request.Host = "who.dis.test"
 	request.Header.Set("X-Forwarded-Proto", "https, http")
@@ -158,10 +159,10 @@ func TestOpenSearchDescriptionUsesForwardedHTTPSWhenTrusted(t *testing.T) {
 
 func TestRDAPRawViewPreservesOriginalBody(t *testing.T) {
 	body := []byte("{\"url\":\"https:\\/\\/rdap.example\\/domain\\/example.com\",\"number\":1.2300e+02}\n")
-	app := newTestApp(t, &fakeWHOISClient{}, &fakeRDAPClient{})
+	app := newTestApp(t, &lookuptest.WHOISClient{}, &lookuptest.RDAPClient{})
 	data := pageData{}
-	app.populatePage(&data, lookupResult{Items: []resultItem{{
-		Protocol:   protocolRDAP,
+	app.populatePage(&data, lookup.Result{Items: []lookup.Item{{
+		Protocol:   lookup.RDAP,
 		StatusCode: http.StatusOK,
 		Body:       body,
 		JSON:       true,
@@ -197,11 +198,11 @@ func TestFormatDuration(t *testing.T) {
 }
 
 func TestPopulatePageNumbersHopsAndCopiesDuration(t *testing.T) {
-	app := newTestApp(t, &fakeWHOISClient{}, &fakeRDAPClient{})
+	app := newTestApp(t, &lookuptest.WHOISClient{}, &lookuptest.RDAPClient{})
 	data := pageData{}
-	app.populatePage(&data, lookupResult{Items: []resultItem{
-		{Protocol: protocolWHOIS, Source: "whois.first.test", Duration: 12 * time.Millisecond, Body: []byte("first")},
-		{Protocol: protocolWHOIS, Source: "whois.second.test", Duration: 1250 * time.Millisecond, Body: []byte("second")},
+	app.populatePage(&data, lookup.Result{Items: []lookup.Item{
+		{Protocol: lookup.WHOIS, Source: "whois.first.test", Duration: 12 * time.Millisecond, Body: []byte("first")},
+		{Protocol: lookup.WHOIS, Source: "whois.second.test", Duration: 1250 * time.Millisecond, Body: []byte("second")},
 	}}, time.Now())
 
 	if len(data.Results) != 2 {
@@ -216,29 +217,31 @@ func TestPopulatePageNumbersHopsAndCopiesDuration(t *testing.T) {
 }
 
 func TestUnknownProtocolReturns400WithoutLookup(t *testing.T) {
-	rdapClient := &fakeRDAPClient{}
-	whoisClient := &fakeWHOISClient{}
+	rdapClient := &lookuptest.RDAPClient{}
+	whoisClient := &lookuptest.WHOISClient{}
 	app := newTestApp(t, whoisClient, rdapClient)
 	recorder := httptest.NewRecorder()
 	app.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/lookup?q=example.com&protocol=dns", nil))
-	if recorder.Code != http.StatusBadRequest || rdapClient.calls != 0 || whoisClient.calls != 0 {
-		t.Fatalf("status = %d, RDAP calls = %d, WHOIS calls = %d", recorder.Code, rdapClient.calls, whoisClient.calls)
+	if recorder.Code != http.StatusBadRequest || rdapClient.Calls() != 0 || whoisClient.Calls() != 0 {
+		t.Fatalf("status = %d, RDAP calls = %d, WHOIS calls = %d", recorder.Code, rdapClient.Calls(), whoisClient.Calls())
 	}
 }
 
 func TestInvalidTargetReturns400WithoutLookup(t *testing.T) {
-	rdapClient := &fakeRDAPClient{}
-	whoisClient := &fakeWHOISClient{}
+	rdapClient := &lookuptest.RDAPClient{}
+	whoisClient := &lookuptest.WHOISClient{}
 	app := newTestApp(t, whoisClient, rdapClient)
-	recorder := httptest.NewRecorder()
-	app.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/lookup?q=two%20resources", nil))
-	if recorder.Code != http.StatusBadRequest || rdapClient.calls != 0 || whoisClient.calls != 0 {
-		t.Fatalf("status = %d, RDAP calls = %d, WHOIS calls = %d", recorder.Code, rdapClient.calls, whoisClient.calls)
+	for _, rawURL := range []string{"/lookup?q=two%20resources", "/lookup?q=" + strings.Repeat("a", 257)} {
+		recorder := httptest.NewRecorder()
+		app.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, rawURL, nil))
+		if recorder.Code != http.StatusBadRequest || rdapClient.Calls() != 0 || whoisClient.Calls() != 0 {
+			t.Fatalf("GET %s: status = %d, RDAP calls = %d, WHOIS calls = %d", rawURL, recorder.Code, rdapClient.Calls(), whoisClient.Calls())
+		}
 	}
 }
 
 func TestLegacyRoutesRedirectToLookupAndPreserveExplicitProtocol(t *testing.T) {
-	app := newTestApp(t, &fakeWHOISClient{}, &fakeRDAPClient{})
+	app := newTestApp(t, &lookuptest.WHOISClient{}, &lookuptest.RDAPClient{})
 	tests := map[string]string{
 		"/whois?q=example.com":               "/lookup?q=example.com",
 		"/?q=example.com&protocol=whois":     "/lookup?protocol=whois&q=example.com",
@@ -255,16 +258,16 @@ func TestLegacyRoutesRedirectToLookupAndPreserveExplicitProtocol(t *testing.T) {
 }
 
 func TestAutoDoesNotFallbackOnFourHundredResponse(t *testing.T) {
-	rdapClient := &fakeRDAPClient{
-		result: rdap.Result{Response: rdap.Response{URL: "https://rdap.example/domain/missing.test", StatusCode: http.StatusNotFound, Body: []byte(`{"errorCode":404,"title":"not found"}`)}},
-		err:    &rdap.HTTPError{StatusCode: http.StatusNotFound, Status: "404 Not Found"},
+	rdapClient := &lookuptest.RDAPClient{
+		Result: rdap.Result{Response: rdap.Response{URL: "https://rdap.example/domain/missing.test", StatusCode: http.StatusNotFound, Body: []byte(`{"errorCode":404,"title":"not found"}`)}},
+		Err:    &rdap.HTTPError{StatusCode: http.StatusNotFound, Status: "404 Not Found"},
 	}
-	whoisClient := &fakeWHOISClient{}
+	whoisClient := &lookuptest.WHOISClient{}
 	app := newTestApp(t, whoisClient, rdapClient)
 	recorder := httptest.NewRecorder()
 	app.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/lookup?q=missing.test", nil))
-	if whoisClient.calls != 0 {
-		t.Fatalf("WHOIS calls = %d", whoisClient.calls)
+	if whoisClient.Calls() != 0 {
+		t.Fatalf("WHOIS calls = %d", whoisClient.Calls())
 	}
 	page := recorder.Body.String()
 	for _, want := range []string{"404 Not Found", "errorCode", "Failed", "Request failed:"} {
@@ -278,11 +281,11 @@ func TestAutoDoesNotFallbackOnFourHundredResponse(t *testing.T) {
 }
 
 func TestAutoFallbackSuppressesFailedRDAPBodyAndRetainsMode(t *testing.T) {
-	rdapClient := &fakeRDAPClient{
-		result: rdap.Result{Response: rdap.Response{URL: "https://bad.example/", StatusCode: http.StatusBadGateway, Body: []byte(`{"secret-failed-body":true}`)}},
-		err:    &rdap.HTTPError{StatusCode: http.StatusBadGateway, Status: "502 Bad Gateway"},
+	rdapClient := &lookuptest.RDAPClient{
+		Result: rdap.Result{Response: rdap.Response{URL: "https://bad.example/", StatusCode: http.StatusBadGateway, Body: []byte(`{"secret-failed-body":true}`)}},
+		Err:    &rdap.HTTPError{StatusCode: http.StatusBadGateway, Status: "502 Bad Gateway"},
 	}
-	whoisClient := &fakeWHOISClient{result: whois.Result{Query: "example.com", Responses: []whois.Response{{Endpoint: whois.Endpoint{Host: "whois.example"}, Body: []byte("Domain Name: EXAMPLE.COM\r\n")}}}}
+	whoisClient := &lookuptest.WHOISClient{Result: whois.Result{Query: "example.com", Responses: []whois.Response{{Endpoint: whois.Endpoint{Host: "whois.example"}, Body: []byte("Domain Name: EXAMPLE.COM\r\n")}}}}
 	app := newTestApp(t, whoisClient, rdapClient)
 	recorder := httptest.NewRecorder()
 	app.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/lookup?q=example.com&protocol=auto", nil))
@@ -298,15 +301,15 @@ func TestAutoFallbackSuppressesFailedRDAPBodyAndRetainsMode(t *testing.T) {
 }
 
 func TestAutoPreservesSuccessfulRDAPHopWhenReferralFails(t *testing.T) {
-	rdapClient := &fakeRDAPClient{
-		result: rdap.Result{Query: "example.com", Responses: []rdap.Response{{
+	rdapClient := &lookuptest.RDAPClient{
+		Result: rdap.Result{Query: "example.com", Responses: []rdap.Response{{
 			URL:        "https://registry.example/domain/example.com",
 			StatusCode: http.StatusOK,
 			Body:       []byte(`{"objectClassName":"domain","handle":"REGISTRY"}`),
 		}}},
-		err: errors.New("registrar unavailable"),
+		Err: errors.New("registrar unavailable"),
 	}
-	whoisClient := &fakeWHOISClient{result: whois.Result{Responses: []whois.Response{{Body: []byte("must not be used")}}}}
+	whoisClient := &lookuptest.WHOISClient{Result: whois.Result{Responses: []whois.Response{{Body: []byte("must not be used")}}}}
 	app := newTestApp(t, whoisClient, rdapClient)
 	recorder := httptest.NewRecorder()
 	app.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/lookup?q=example.com", nil))
@@ -317,17 +320,17 @@ func TestAutoPreservesSuccessfulRDAPHopWhenReferralFails(t *testing.T) {
 	if resultPosition < 0 || errorPosition < resultPosition {
 		t.Fatalf("partial RDAP error was not rendered after its completed response:\n%s", page)
 	}
-	if whoisClient.calls != 0 || strings.Contains(page, "must not be used") || strings.Contains(page, "showing WHOIS fallback") {
-		t.Fatalf("successful partial RDAP result incorrectly fell back to WHOIS: calls = %d\n%s", whoisClient.calls, page)
+	if whoisClient.Calls() != 0 || strings.Contains(page, "must not be used") || strings.Contains(page, "showing WHOIS fallback") {
+		t.Fatalf("successful partial RDAP result incorrectly fell back to WHOIS: calls = %d\n%s", whoisClient.Calls(), page)
 	}
 }
 
 func TestForcedRDAPShowsInvalidJSONEscaped(t *testing.T) {
-	rdapClient := &fakeRDAPClient{
-		result: rdap.Result{Response: rdap.Response{URL: "https://rdap.example/", StatusCode: http.StatusOK, Body: []byte(`<b>not json</b>`)}},
-		err:    rdap.ErrInvalidResponse,
+	rdapClient := &lookuptest.RDAPClient{
+		Result: rdap.Result{Response: rdap.Response{URL: "https://rdap.example/", StatusCode: http.StatusOK, Body: []byte(`<b>not json</b>`)}},
+		Err:    rdap.ErrInvalidResponse,
 	}
-	app := newTestApp(t, &fakeWHOISClient{}, rdapClient)
+	app := newTestApp(t, &lookuptest.WHOISClient{}, rdapClient)
 	recorder := httptest.NewRecorder()
 	app.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/lookup?q=example.com&protocol=rdap", nil))
 	page := recorder.Body.String()
@@ -343,10 +346,10 @@ func TestForcedRDAPShowsInvalidJSONEscaped(t *testing.T) {
 }
 
 func TestBothProtocolFailuresPreservePartialWHOIS(t *testing.T) {
-	rdapClient := &fakeRDAPClient{err: rdap.ErrNoService}
-	whoisClient := &fakeWHOISClient{
-		result: whois.Result{Responses: []whois.Response{{Endpoint: whois.Endpoint{Host: "whois.example"}, Body: []byte("partial output")}}},
-		err:    errors.New("registrar unavailable"),
+	rdapClient := &lookuptest.RDAPClient{Err: rdap.ErrNoService}
+	whoisClient := &lookuptest.WHOISClient{
+		Result: whois.Result{Responses: []whois.Response{{Endpoint: whois.Endpoint{Host: "whois.example"}, Body: []byte("partial output")}}},
+		Err:    errors.New("registrar unavailable"),
 	}
 	app := newTestApp(t, whoisClient, rdapClient)
 	recorder := httptest.NewRecorder()
@@ -363,12 +366,10 @@ func TestBothProtocolFailuresPreservePartialWHOIS(t *testing.T) {
 }
 
 func TestCacheSeparatesProtocolsAndReportsRemainingLifetime(t *testing.T) {
-	rdapClient := &fakeRDAPClient{result: rdap.Result{Response: rdap.Response{URL: "https://rdap.example/", StatusCode: http.StatusOK, Header: http.Header{"Cache-Control": {"max-age=60"}}, Body: []byte(`{}`)}}}
-	whoisClient := &fakeWHOISClient{result: whois.Result{Responses: []whois.Response{{Endpoint: whois.Endpoint{Host: "whois.example"}, Body: []byte("whois")}}}}
-	app := newTestApp(t, whoisClient, rdapClient)
+	rdapClient := &lookuptest.RDAPClient{Result: rdap.Result{Response: rdap.Response{URL: "https://rdap.example/", StatusCode: http.StatusOK, Header: http.Header{"Cache-Control": {"max-age=60"}}, Body: []byte(`{}`)}}}
+	whoisClient := &lookuptest.WHOISClient{Result: whois.Result{Responses: []whois.Response{{Endpoint: whois.Endpoint{Host: "whois.example"}, Body: []byte("whois")}}}}
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	app.now = func() time.Time { return now }
-	app.cache = newCache(app.now)
+	app := newConfiguredTestApp(t, whoisClient, rdapClient, func() time.Time { return now }, Config{})
 	handler := app.Handler()
 
 	request := func(rawURL string) *httptest.ResponseRecorder {
@@ -376,8 +377,8 @@ func TestCacheSeparatesProtocolsAndReportsRemainingLifetime(t *testing.T) {
 		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, rawURL, nil))
 		return recorder
 	}
-	if got := request("/lookup?q=example.com&protocol=rdap"); got.Header().Get("Whodis-Cache") != "MISS" {
-		t.Fatalf("first cache = %q", got.Header().Get("Whodis-Cache"))
+	if got := request("/lookup?q=example.com&protocol=rdap"); got.Header().Get("Whodis-Cache") != "MISS" || got.Header().Get("Cache-Control") != "public, max-age=60" {
+		t.Fatalf("miss headers = %#v", got.Header())
 	}
 	now = now.Add(15 * time.Second)
 	if got := request("/lookup?q=EXAMPLE.COM&protocol=rdap"); got.Header().Get("Cache-Control") != "public, max-age=45" || got.Header().Get("Whodis-Cache") != "HIT" {
@@ -386,16 +387,15 @@ func TestCacheSeparatesProtocolsAndReportsRemainingLifetime(t *testing.T) {
 		t.Fatalf("cache hit page does not identify cached result:\n%s", got.Body.String())
 	}
 	request("/lookup?q=example.com&protocol=whois")
-	if rdapClient.calls != 1 || whoisClient.calls != 1 {
-		t.Fatalf("RDAP calls = %d, WHOIS calls = %d", rdapClient.calls, whoisClient.calls)
+	if rdapClient.Calls() != 1 || whoisClient.Calls() != 1 {
+		t.Fatalf("RDAP calls = %d, WHOIS calls = %d", rdapClient.Calls(), whoisClient.Calls())
 	}
 }
 
 func TestRateLimitAppliesOnlyToCacheMisses(t *testing.T) {
-	rdapClient := &fakeRDAPClient{}
-	whoisClient := &fakeWHOISClient{result: whois.Result{Responses: []whois.Response{{Endpoint: whois.Endpoint{Host: "whois.example"}, Body: []byte("whois")}}}}
-	app := newTestApp(t, whoisClient, rdapClient)
-	app.limiter = newRateLimiter(1, 1, app.now)
+	rdapClient := &lookuptest.RDAPClient{}
+	whoisClient := &lookuptest.WHOISClient{Result: whois.Result{Responses: []whois.Response{{Endpoint: whois.Endpoint{Host: "whois.example"}, Body: []byte("whois")}}}}
+	app := newConfiguredTestApp(t, whoisClient, rdapClient, nil, Config{Limiter: lookup.NewRateLimiter(1, 1)})
 	handler := app.Handler()
 	for index, rawURL := range []string{"/lookup?q=example.com&protocol=whois", "/lookup?q=example.com&protocol=whois", "/lookup?q=example.net&protocol=whois"} {
 		recorder := httptest.NewRecorder()
@@ -408,7 +408,31 @@ func TestRateLimitAppliesOnlyToCacheMisses(t *testing.T) {
 			t.Errorf("request %d status = %d, want %d", index, recorder.Code, want)
 		}
 	}
-	if whoisClient.calls != 1 {
-		t.Fatalf("WHOIS calls = %d", whoisClient.calls)
+	if whoisClient.Calls() != 1 {
+		t.Fatalf("WHOIS calls = %d", whoisClient.Calls())
 	}
+}
+
+func newTestApp(t *testing.T, whoisClient lookup.WHOISClient, rdapClient lookup.RDAPClient) *App {
+	t.Helper()
+	return newConfiguredTestApp(t, whoisClient, rdapClient, nil, Config{})
+}
+
+func newConfiguredTestApp(t *testing.T, whoisClient lookup.WHOISClient, rdapClient lookup.RDAPClient, now func() time.Time, config Config) *App {
+	t.Helper()
+	service, err := lookup.NewService(lookup.Config{
+		CacheTTL:        time.Hour,
+		LookupTimeout:   time.Second,
+		RDAPAutoTimeout: 100 * time.Millisecond,
+		Now:             now,
+	}, whoisClient, rdapClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := New(service, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.logf = t.Logf
+	return app
 }

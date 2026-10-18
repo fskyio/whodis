@@ -2,6 +2,9 @@
 AutoUpdate=registry
 ContainerName=whodis
 DropCapability=ALL
+# MCP access tokens; see README.md. Generate with: openssl rand -hex 32
+#Environment=MCP_TOKENS=
+#Environment=MCP_REQUIRE_TOKEN=true
 Image=gitfield.org/fsky/whodis:latest
 LogDriver=none
 NoNewPrivileges=true

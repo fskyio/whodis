@@ -4,8 +4,8 @@ import (
 	"encoding/xml"
 	"io"
 	"net/http"
-	"net/url"
-	"strings"
+
+	"gitfield.org/fsky/whodis/internal/forwarded"
 )
 
 const openSearchMediaType = "application/opensearchdescription+xml"
@@ -49,7 +49,7 @@ func (a *App) handleOpenSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	baseURL := a.requestBaseURL(r)
+	baseURL := forwarded.BaseURL(r, a.config.TrustProxyHeaders)
 	description := openSearchDescription{
 		XMLNS:         "http://a9.com/-/spec/opensearch/1.1/",
 		ShortName:     "who dis?",
@@ -70,25 +70,4 @@ func (a *App) handleOpenSearch(w http.ResponseWriter, r *http.Request) {
 	if err := xml.NewEncoder(w).Encode(description); err != nil {
 		a.logf("OpenSearch description encoding error: %v", err)
 	}
-}
-
-func (a *App) requestBaseURL(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	if a.config.TrustProxyHeaders {
-		if forwardedProto := firstHeaderValue(r.Header.Get("X-Forwarded-Proto")); forwardedProto == "http" || forwardedProto == "https" {
-			scheme = forwardedProto
-		}
-	}
-
-	return (&url.URL{Scheme: scheme, Host: r.Host}).String()
-}
-
-func firstHeaderValue(value string) string {
-	if index := strings.IndexByte(value, ','); index >= 0 {
-		value = value[:index]
-	}
-	return strings.ToLower(strings.TrimSpace(value))
 }

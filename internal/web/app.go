@@ -2,39 +2,41 @@ package web
 
 import (
 	"bytes"
-	"context"
 	"embed"
 	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
-	"gitfield.org/fsky/whodis/internal/target"
+	"gitfield.org/fsky/whodis/internal/forwarded"
+	"gitfield.org/fsky/whodis/internal/lookup"
 )
 
 //go:embed templates/* static/*
 var content embed.FS
 
+// Config controls request handling that is specific to the web UI.
+type Config struct {
+	// Limiter admits cache-miss lookups per client IP; nil disables limiting.
+	Limiter           *lookup.RateLimiter
+	TrustProxyHeaders bool
+}
+
 type App struct {
 	config  Config
-	whois   whoisLookupClient
-	rdap    rdapLookupClient
-	cache   *cacheStore
-	limiter *rateLimiter
+	service *lookup.Service
 	tmpl    *template.Template
-	now     func() time.Time
 	logf    func(string, ...any)
 }
 
 type pageData struct {
 	Query        string
-	Protocol     protocol
+	Protocol     lookup.Protocol
 	AutoChecked  bool
 	RDAPChecked  bool
 	WHOISChecked bool
@@ -62,28 +64,15 @@ type viewResult struct {
 	Warning     string
 }
 
-func New(config Config, whoisClient whoisLookupClient, rdapClient rdapLookupClient) (*App, error) {
-	if whoisClient == nil || rdapClient == nil {
-		return nil, fmt.Errorf("lookup clients must not be nil")
+func New(service *lookup.Service, config Config) (*App, error) {
+	if service == nil {
+		return nil, fmt.Errorf("lookup service must not be nil")
 	}
 	tmpl, err := template.ParseFS(content, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now
-	app := &App{
-		config: config,
-		whois:  whoisClient,
-		rdap:   rdapClient,
-		tmpl:   tmpl,
-		now:    now,
-		logf:   log.Printf,
-	}
-	app.cache = newCache(now)
-	if config.RateLimitPerMinute > 0 {
-		app.limiter = newRateLimiter(config.RateLimitPerMinute, config.RateLimitBurst, now)
-	}
-	return app, nil
+	return &App{config: config, service: service, tmpl: tmpl, logf: log.Printf}, nil
 }
 
 func (a *App) Handler() http.Handler {
@@ -95,22 +84,6 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("/whois", a.handleLegacyWhois)
 	mux.HandleFunc("/", a.handleIndex)
 	return mux
-}
-
-func (a *App) RunMaintenance(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			a.cache.Cleanup()
-			if a.limiter != nil {
-				a.limiter.Cleanup(time.Hour)
-			}
-		}
-	}
 }
 
 func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +98,7 @@ func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 		a.redirectLookup(w, r, query, r.URL.Query().Get("protocol"), http.StatusPermanentRedirect)
 		return
 	}
-	a.renderPage(w, http.StatusOK, pageData{Protocol: protocolAuto, AutoChecked: true}, "no-cache, no-store, must-revalidate")
+	a.renderPage(w, http.StatusOK, pageData{Protocol: lookup.Auto, AutoChecked: true}, "no-cache, no-store, must-revalidate")
 }
 
 func (a *App) handleLegacyWhois(w http.ResponseWriter, r *http.Request) {
@@ -163,66 +136,56 @@ func (a *App) handleLookup(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	mode, err := parseProtocol(r.URL.Query().Get("protocol"))
+	mode, err := lookup.ParseProtocol(r.URL.Query().Get("protocol"))
 	data := newPageData(query, mode)
 	if err != nil {
 		data.Error = err.Error() + ". Choose Auto, RDAP, or WHOIS."
 		a.renderPage(w, http.StatusBadRequest, data, "no-cache, no-store, must-revalidate")
 		return
 	}
-	if len(query) > 256 {
+
+	outcome, err := a.service.Lookup(r.Context(), lookup.Request{
+		Query:    query,
+		Protocol: mode,
+		Limiter:  a.config.Limiter,
+		Client:   forwarded.ClientIP(r, a.config.TrustProxyHeaders),
+	})
+	var rateLimitErr *lookup.RateLimitError
+	switch {
+	case errors.Is(err, lookup.ErrQueryTooLong):
 		data.Error = "Query is too long. Please limit it to 256 characters."
 		a.renderPage(w, http.StatusBadRequest, data, "no-cache, no-store, must-revalidate")
 		return
-	}
-	if _, err := target.Parse(query, 256); err != nil {
+	case errors.Is(err, lookup.ErrInvalidTarget):
 		data.Error = "Invalid lookup target: " + err.Error()
 		a.renderPage(w, http.StatusBadRequest, data, "no-cache, no-store, must-revalidate")
 		return
-	}
-
-	key := normalizedCacheKey(mode, query)
-	if entry, found := a.cache.Get(key); found {
-		w.Header().Set("Whodis-Cache", "HIT")
-		remaining := entry.ExpiresAt.Sub(a.now())
-		a.populatePage(&data, entry.Result, entry.FetchedAt)
-		data.LookupTime = formatDuration(lookupResultDuration(entry.Result))
-		data.CacheHit = true
-		a.renderPage(w, http.StatusOK, data, fmt.Sprintf("public, max-age=%d", int(remaining.Seconds())))
-		return
-	}
-
-	if a.limiter != nil && !a.limiter.Allow(a.clientIP(r)) {
+	case errors.As(err, &rateLimitErr):
 		data.Error = "Rate limit exceeded. Please wait a moment and try again."
 		w.Header().Set("Retry-After", "30")
 		a.renderPage(w, http.StatusTooManyRequests, data, "no-cache, no-store, must-revalidate")
 		return
-	}
-
-	w.Header().Set("Whodis-Cache", "MISS")
-	lookupStarted := time.Now()
-	lookupCtx, cancel := context.WithTimeout(r.Context(), a.config.LookupTimeout)
-	result, lookupErr := a.performLookup(lookupCtx, query, mode)
-	cancel()
-	lookupTime := time.Since(lookupStarted)
-	if lookupErr != nil && (errorsIsCancellation(lookupErr) || r.Context().Err() != nil) {
+	case err != nil:
+		// The client went away or the lookup exceeded its time budget.
 		return
 	}
 
-	fetchedAt := a.now()
 	cacheControl := "no-cache, no-store, must-revalidate"
-	result.Duration = lookupTime
-	if result.Cacheable && result.TTL > 0 {
-		entry := cacheEntry{Result: result, FetchedAt: fetchedAt, ExpiresAt: fetchedAt.Add(result.TTL)}
-		a.cache.Set(key, entry)
-		cacheControl = fmt.Sprintf("public, max-age=%d", int(result.TTL.Seconds()))
+	if outcome.CacheHit || outcome.MaxAge > 0 {
+		cacheControl = fmt.Sprintf("public, max-age=%d", int(outcome.MaxAge.Seconds()))
 	}
-	a.populatePage(&data, result, fetchedAt)
-	data.LookupTime = formatDuration(result.Duration)
+	if outcome.CacheHit {
+		w.Header().Set("Whodis-Cache", "HIT")
+	} else {
+		w.Header().Set("Whodis-Cache", "MISS")
+	}
+	a.populatePage(&data, outcome.Result, outcome.FetchedAt)
+	data.LookupTime = formatDuration(lookupResultDuration(outcome.Result))
+	data.CacheHit = outcome.CacheHit
 	a.renderPage(w, http.StatusOK, data, cacheControl)
 }
 
-func (a *App) populatePage(data *pageData, result lookupResult, fetchedAt time.Time) {
+func (a *App) populatePage(data *pageData, result lookup.Result, fetchedAt time.Time) {
 	data.Error = result.Error
 	data.Notice = result.Notice
 	data.FetchedAt = fetchedAt.Format(time.RFC1123)
@@ -232,7 +195,7 @@ func (a *App) populatePage(data *pageData, result lookupResult, fetchedAt time.T
 			data.HasFailedHop = true
 		}
 		switch item.Protocol {
-		case protocolRDAP:
+		case lookup.RDAP:
 			view.Protocol = "RDAP"
 			view.SourceLabel = "Queried URL"
 			view.SourceURL = item.Source
@@ -270,7 +233,7 @@ func formatDuration(duration time.Duration) string {
 	return fmt.Sprintf("%.2f s", duration.Round(10*time.Millisecond).Seconds())
 }
 
-func lookupResultDuration(result lookupResult) time.Duration {
+func lookupResultDuration(result lookup.Result) time.Duration {
 	if result.Duration > 0 {
 		return result.Duration
 	}
@@ -281,13 +244,13 @@ func lookupResultDuration(result lookupResult) time.Duration {
 	return total
 }
 
-func newPageData(query string, mode protocol) pageData {
+func newPageData(query string, mode lookup.Protocol) pageData {
 	return pageData{
 		Query:        query,
 		Protocol:     mode,
-		AutoChecked:  mode == protocolAuto,
-		RDAPChecked:  mode == protocolRDAP,
-		WHOISChecked: mode == protocolWHOIS,
+		AutoChecked:  mode == lookup.Auto,
+		RDAPChecked:  mode == lookup.RDAP,
+		WHOISChecked: mode == lookup.WHOIS,
 	}
 }
 
@@ -317,25 +280,6 @@ func (a *App) handleFavicon(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(file)
 }
 
-func (a *App) clientIP(r *http.Request) string {
-	if a.config.TrustProxyHeaders {
-		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-			if index := strings.Index(forwarded, ","); index >= 0 {
-				return strings.TrimSpace(forwarded[:index])
-			}
-			return strings.TrimSpace(forwarded)
-		}
-		if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
-			return strings.TrimSpace(realIP)
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
 func allowGet(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		return true
@@ -343,8 +287,4 @@ func allowGet(w http.ResponseWriter, r *http.Request) bool {
 	w.Header().Set("Allow", "GET, HEAD")
 	http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	return false
-}
-
-func errorsIsCancellation(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

@@ -1,4 +1,6 @@
-package web
+// Package lookup performs the cached RDAP and WHOIS lookups shared by the web
+// UI and the MCP server.
+package lookup
 
 import (
 	"context"
@@ -17,37 +19,45 @@ import (
 
 const errorCacheTTL = 5 * time.Minute
 
-type protocol string
+// Protocol selects how a lookup is performed. Items report the protocol that
+// produced them, which is always RDAP or WHOIS.
+type Protocol string
 
 const (
-	protocolAuto  protocol = "auto"
-	protocolRDAP  protocol = "rdap"
-	protocolWHOIS protocol = "whois"
+	Auto  Protocol = "auto"
+	RDAP  Protocol = "rdap"
+	WHOIS Protocol = "whois"
 )
 
-type whoisLookupClient interface {
+// WHOISClient is implemented by *whois.Client.
+type WHOISClient interface {
 	Lookup(context.Context, string) (whois.Result, error)
 }
 
-type rdapLookupClient interface {
+// RDAPClient is implemented by *rdap.Client.
+type RDAPClient interface {
 	Lookup(context.Context, string) (rdap.Result, error)
 }
 
-type resultItem struct {
-	Protocol   protocol
+// Item is one queried server, in traversal order.
+type Item struct {
+	Protocol   Protocol
 	Source     string
 	StatusCode int
 	Duration   time.Duration
 	Error      string
 	Body       []byte
-	JSON       bool
-	Warning    string
+	// JSON reports that Body is a valid JSON document.
+	JSON    bool
+	Warning string
 }
 
-type lookupResult struct {
+// Result is a completed lookup. Error and Notice summarize the whole lookup;
+// per-server failures are reported on Items.
+type Result struct {
 	Query     string
-	Requested protocol
-	Items     []resultItem
+	Requested Protocol
+	Items     []Item
 	Error     string
 	Notice    string
 	Duration  time.Duration
@@ -55,22 +65,24 @@ type lookupResult struct {
 	Cacheable bool
 }
 
-func parseProtocol(value string) (protocol, error) {
-	switch protocol(strings.ToLower(strings.TrimSpace(value))) {
-	case "", protocolAuto:
-		return protocolAuto, nil
-	case protocolRDAP:
-		return protocolRDAP, nil
-	case protocolWHOIS:
-		return protocolWHOIS, nil
+// ParseProtocol parses a case-insensitive protocol name. An empty value
+// selects Auto.
+func ParseProtocol(value string) (Protocol, error) {
+	switch Protocol(strings.ToLower(strings.TrimSpace(value))) {
+	case "", Auto:
+		return Auto, nil
+	case RDAP:
+		return RDAP, nil
+	case WHOIS:
+		return WHOIS, nil
 	default:
-		return protocolAuto, fmt.Errorf("unknown protocol %q", value)
+		return Auto, fmt.Errorf("unknown protocol %q", value)
 	}
 }
 
-func normalizedCacheKey(mode protocol, query string) string {
+func normalizedCacheKey(mode Protocol, query string) string {
 	normalized := strings.ToLower(strings.TrimSpace(query))
-	if parsed, err := target.Parse(query, 256); err == nil {
+	if parsed, err := target.Parse(query, MaxQueryBytes); err == nil {
 		if parsed.NameASCII != "" && strings.Contains(parsed.NameASCII, ".") {
 			normalized = parsed.NameASCII
 		} else {
@@ -80,39 +92,39 @@ func normalizedCacheKey(mode protocol, query string) string {
 	return string(mode) + "\x00" + normalized
 }
 
-func (a *App) performLookup(ctx context.Context, query string, mode protocol) (lookupResult, error) {
+func (s *Service) perform(ctx context.Context, query string, mode Protocol) (Result, error) {
 	switch mode {
-	case protocolRDAP:
-		result, err := a.lookupRDAP(ctx, query)
+	case RDAP:
+		result, err := s.lookupRDAP(ctx, query)
 		result.Requested = mode
 		if isRequestCancellation(ctx, err) {
-			return lookupResult{}, ctx.Err()
+			return Result{}, ctx.Err()
 		}
 		return result, nil
-	case protocolWHOIS:
-		result, err := a.lookupWHOIS(ctx, query)
+	case WHOIS:
+		result, err := s.lookupWHOIS(ctx, query)
 		result.Requested = mode
 		if isRequestCancellation(ctx, err) {
-			return lookupResult{}, ctx.Err()
+			return Result{}, ctx.Err()
 		}
 		return result, nil
 	default:
-		rdapCtx, cancel := context.WithTimeout(ctx, a.config.RDAPAutoTimeout)
-		rdapResult, rdapErr := a.lookupRDAP(rdapCtx, query)
+		rdapCtx, cancel := context.WithTimeout(ctx, s.config.RDAPAutoTimeout)
+		rdapResult, rdapErr := s.lookupRDAP(rdapCtx, query)
 		cancel()
 		if ctx.Err() != nil {
-			return lookupResult{}, ctx.Err()
+			return Result{}, ctx.Err()
 		}
 		if rdapErr == nil || !shouldFallbackRDAP(rdapErr) || hasSuccessfulRDAPResponse(rdapResult) {
-			rdapResult.Requested = protocolAuto
+			rdapResult.Requested = Auto
 			return rdapResult, nil
 		}
 
-		whoisResult, whoisErr := a.lookupWHOIS(ctx, query)
+		whoisResult, whoisErr := s.lookupWHOIS(ctx, query)
 		if isRequestCancellation(ctx, whoisErr) {
-			return lookupResult{}, ctx.Err()
+			return Result{}, ctx.Err()
 		}
-		whoisResult.Requested = protocolAuto
+		whoisResult.Requested = Auto
 		whoisResult.Notice = "RDAP was unavailable (" + rdapErr.Error() + "); showing WHOIS fallback."
 		whoisResult.Items = append(summarizeFailedItems(rdapResult.Items), whoisResult.Items...)
 		whoisResult.TTL = errorCacheTTL
@@ -124,16 +136,16 @@ func (a *App) performLookup(ctx context.Context, query string, mode protocol) (l
 	}
 }
 
-func (a *App) lookupRDAP(ctx context.Context, query string) (lookupResult, error) {
-	result, err := a.rdap.Lookup(ctx, query)
-	output := lookupResult{Query: result.Query, TTL: errorCacheTTL, Cacheable: true}
+func (s *Service) lookupRDAP(ctx context.Context, query string) (Result, error) {
+	result, err := s.rdap.Lookup(ctx, query)
+	output := Result{Query: result.Query, TTL: errorCacheTTL, Cacheable: true}
 	responses := result.Responses
 	if len(responses) == 0 && (result.Response.Error != nil || result.Response.URL != "" || len(result.Response.Body) > 0 || result.Response.StatusCode != 0 || result.Response.Truncated) {
 		responses = []rdap.Response{result.Response}
 	}
 	for _, response := range responses {
-		item := resultItem{
-			Protocol:   protocolRDAP,
+		item := Item{
+			Protocol:   RDAP,
 			Source:     response.URL,
 			StatusCode: response.StatusCode,
 			Duration:   response.Duration,
@@ -156,22 +168,22 @@ func (a *App) lookupRDAP(ctx context.Context, query string) (lookupResult, error
 		output.Error = "RDAP lookup failed: " + err.Error()
 		return output, err
 	}
-	output.TTL, output.Cacheable = rdapResponsesFreshness(responses, a.config.CacheTTL, a.now())
+	output.TTL, output.Cacheable = rdapResponsesFreshness(responses, s.config.CacheTTL, s.now())
 	return output, nil
 }
 
-func hasSuccessfulRDAPResponse(result lookupResult) bool {
+func hasSuccessfulRDAPResponse(result Result) bool {
 	for _, item := range result.Items {
-		if item.Protocol == protocolRDAP && item.StatusCode >= http.StatusOK && item.StatusCode < http.StatusMultipleChoices && item.JSON {
+		if item.Protocol == RDAP && item.StatusCode >= http.StatusOK && item.StatusCode < http.StatusMultipleChoices && item.JSON {
 			return true
 		}
 	}
 	return false
 }
 
-func (a *App) lookupWHOIS(ctx context.Context, query string) (lookupResult, error) {
-	result, err := a.whois.Lookup(ctx, query)
-	output := lookupResult{Query: result.Query, TTL: a.config.CacheTTL, Cacheable: true}
+func (s *Service) lookupWHOIS(ctx context.Context, query string) (Result, error) {
+	result, err := s.whois.Lookup(ctx, query)
+	output := Result{Query: result.Query, TTL: s.config.CacheTTL, Cacheable: true}
 	for index, response := range result.Responses {
 		body := strings.TrimSpace(strings.ToValidUTF8(string(response.Body), "\uFFFD"))
 		itemError := responseError(response.Error)
@@ -181,8 +193,8 @@ func (a *App) lookupWHOIS(ctx context.Context, query string) (lookupResult, erro
 		if body == "" && itemError == "" {
 			continue
 		}
-		output.Items = append(output.Items, resultItem{
-			Protocol: protocolWHOIS,
+		output.Items = append(output.Items, Item{
+			Protocol: WHOIS,
 			Source:   displayWHOISEndpoint(response.Endpoint),
 			Duration: response.Duration,
 			Error:    itemError,
@@ -200,8 +212,8 @@ func (a *App) lookupWHOIS(ctx context.Context, query string) (lookupResult, erro
 	return output, err
 }
 
-func summarizeFailedItems(items []resultItem) []resultItem {
-	result := make([]resultItem, 0, len(items))
+func summarizeFailedItems(items []Item) []Item {
+	result := make([]Item, 0, len(items))
 	for _, item := range items {
 		item.Body = nil
 		item.JSON = false
